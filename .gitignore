@@ -5,3 +5,4 @@ journal.db
 civ6-mcp/
 .vscode/
 .idea/
+.venv/

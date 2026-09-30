@@ -7,7 +7,8 @@
 > **v2 更新（本次完善）**：主循环改为「监控式等待」——1 秒级探测回合状态，
 > 回合一结束立即行动；世界议会 / 交易 / 外交等回合阻塞会被自动分类处理；
 > 新增防卡死看门狗；LLM 后端可在 `jevciv6.toml` 中自选
-> （TypeSafe Jev / OpenAI 兼容 / Anthropic / 离线 mock）。详见文末「本次改造摘要」。
+> （TypeSafe Jev / OpenAI 兼容 / Anthropic / 离线 mock）；环境用 uv 一键创建
+> （`uv sync`）。详见文末「本次改造摘要」。
 
 ```text
                  ┌──────────────────────────────────────────────┐
@@ -27,11 +28,12 @@
                  └──────────────────────┘
 ```
 
-## 快速开始（独立运行，不依赖 ZCode）
+## 快速开始（uv 环境，独立运行，不依赖 ZCode）
 
 ```bash
-# 1) 依赖（服务端 + 桥的运行时依赖；桥的源码从 ./civ6-mcp/src 自动加载）
-pip install -r requirements.txt
+# 1) 环境：uv 一键创建 .venv 并装齐服务端 + 桥的全部依赖（含 civ6-mcp editable）
+#    （没有 uv？先安装：pip install uv    或   winget install astral-sh.uv）
+uv sync
 
 # 2) LLM 配置：复制模板并编辑（或直接使用默认 typesafe）
 #    TypeSafe: 从用户环境变量读 TYPESAFE_API_KEY
@@ -39,21 +41,21 @@ pip install -r requirements.txt
 copy jevciv6.example.toml jevciv6.toml        # PowerShell: Copy-Item
 
 # 3) 启动战争议事厅
-python -m uvicorn server.app:app --host 127.0.0.1 --port 8080
+uv run uvicorn server.app:app --host 127.0.0.1 --port 8080
 # → 打开 http://127.0.0.1:8080
 
 # 4) （可选）自检：不需要游戏、不需要网络
-python -m unittest discover -s tests -v      # 30 项单测
-python scripts/dry_run_demo.py               # 干跑：闸门→state→判定→动作计划
+uv run python -m unittest discover -s tests -v   # 30 项单测
+uv run python scripts/dry_run_demo.py            # 干跑：闸门→state→判定→动作计划
 
 # 5) （可选）导入本战役的真实开局战报
-python seed.py
+uv run python seed.py
 ```
 
 游戏侧前置：文明6 开启 FireTuner（选项 → 游戏选项 → 高级 → 启用 FireTuner，重启游戏）。
-桥进程（`python -m civ_mcp`）由 war-room 自动 spawn；它需要的 `civ_mcp` 包直接从
-`./civ6-mcp/src` 注入 PYTHONPATH，**不需要 pip 安装这个子项目**（其依赖已并入
-requirements.txt）。
+桥进程（`python -m civ_mcp`）由 war-room 自动 spawn，默认使用**与服务器同一个解释器**
+（即 `.venv`——`uv sync` 已把 civ6-mcp 以 editable 方式装好）；万一未装，也会自动把
+`./civ6-mcp/src` 注入 PYTHONPATH 兜底。Python 版本要求 ≥ 3.12。
 
 ## LLM 配置（jevciv6.toml）
 
@@ -191,11 +193,13 @@ jev-civ6/
 ├── hooks/              # 可选 ZCode PostToolUse 自动记录器
 ├── artifacts/          # T12 真实判断样本（请求/答案）
 ├── civ6-mcp/           # FireTuner 桥（上游 v1.1.11 + 本项目补丁，见其 git diff）
+├── pyproject.toml      # ★ uv 项目定义（uv sync 一键建环境）
+├── uv.lock             # ★ 依赖版本锁定
 ├── jevciv6.toml        # ★ 活动配置（provider 一行切换）
 ├── jevciv6.example.toml# ★ 全量示例配置
 ├── jev_judge.py        # 独立 CLI 判官（支持 --provider/--model/--config）
 ├── seed.py             # 导入开局战报
-├── requirements.txt    # 服务端 + 桥依赖
+├── requirements.txt    # pip 传统方式等价清单（uv 用户可忽略）
 └── README.md
 ```
 
@@ -249,14 +253,17 @@ jev-civ6/
 3. **"将项目独立出来，可以自己配置 LLM"**
    - `jevciv6.toml` + 4 种 provider（TypeSafe / OpenAI 兼容 / Anthropic / mock），
      环境变量覆盖、CLI（`jev_judge.py --provider …`）、答案规范校验；
+   - uv 一键环境：`uv sync` 建好 `.venv` 并装齐全部依赖（含桥的 editable 安装）；
+     顺带修复桥在中文 Windows 因系统默认 GBK 编码导致的启动崩溃
+     （`version.py` / `diary.py` 显式 utf-8——由 uv 环境实测发现）。
    - 桥自动从 `./civ6-mcp/src` 加载（免 pip 安装子项目）、Windows 特性隔离、
      全量 README（独立部署步骤 + ZCode 作为可选附录保留）。
 
 ## 测试与自检
 
 ```bash
-python -m unittest discover -s tests -v   # 30 tests: gate / autopilot / config+llm / executor
-python scripts/dry_run_demo.py            # offline end-to-end pipeline demo
+uv run python -m unittest discover -s tests -v   # 30 tests: gate / autopilot / config+llm / executor
+uv run python scripts/dry_run_demo.py            # offline end-to-end pipeline demo
 ```
 
 两个命令都不需要游戏本体与网络连接；任何改动后建议先跑这两个再上游戏。

@@ -1,0 +1,18 @@
+[project]
+name = "jev-civ6-war-room"
+version = "0.2.0"
+description = "Civ 6 war-room: decision gate + configurable LLM judgment driving the civ6-mcp FireTuner bridge"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.100",
+    "uvicorn>=0.23",
+    "mcp>=2.0",
+    "anthropic>=0.84.0",
+    "civ6-mcp",
+]
+
+[tool.uv.sources]
+civ6-mcp = { path = "civ6-mcp", editable = true }
+
+[tool.uv]
+package = false
