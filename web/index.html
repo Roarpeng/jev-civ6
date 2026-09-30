@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jev ✕ Civilization VI · 战争议事厅</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="crest">⚔</div>
+    <div>
+      <h1>JEV <span class="x">✕</span> CIVILIZATION VI</h1>
+      <p class="tagline">System One 战争议事厅 · 判断、行动与国势，皆有据可查</p>
+    </div>
+  </div>
+  <div class="chips">
+    <div class="mode-switch" id="mode-switch" title="自动：Jev 通过闸门+MCP 全权驾驶；手动：Jev 决策停止，控制权归玩家">
+      <span class="mode-label" data-side="manual">手动</span>
+      <span class="slider-track"><span class="slider-knob"></span></span>
+      <span class="mode-label" data-side="auto">自动</span>
+    </div>
+    <span class="chip chip-auto hidden" id="chip-pilot">
+      <span class="dot on"></span><span id="pilot-step">AUTO</span>
+    </span>
+    <span class="chip" id="chip-live"><span class="dot"></span><span id="live-label">CONNECTING</span></span>
+    <span class="chip chip-gold" id="chip-turn">TURN —</span>
+    <span class="chip" id="chip-civ">—</span>
+    <span class="chip" id="chip-tokens">✦ 0 tok</span>
+  </div>
+</header>
+
+<main class="layout">
+  <section class="timeline-col">
+    <div class="col-head">
+      <h2>战局编年史</h2>
+      <div class="filters" id="filters">
+        <button class="filter active" data-t="all">全部</button>
+        <button class="filter" data-t="gate">闸门</button>
+        <button class="filter" data-t="jev">判断</button>
+        <button class="filter" data-t="action">行动</button>
+        <button class="filter" data-t="state">国势</button>
+      </div>
+    </div>
+    <div id="timeline" class="timeline">
+      <div class="empty" id="empty">
+        <div class="empty-glyph">❖</div>
+        <p>尚无记录。通过 <code>POST /api/jev</code>、<code>/api/action</code>、<code>/api/state</code>
+        喂入战局，或运行 <code>python seed.py</code> 导入开局战报。</p>
+      </div>
+    </div>
+  </section>
+
+  <aside class="sidebar">
+    <div class="panel" id="panel-battlefield">
+      <h3 class="panel-title">◈ 国势 · BATTLEFIELD</h3>
+      <div id="battlefield"><p class="muted">等待战报……（POST /api/state）</p></div>
+    </div>
+
+    <div class="panel" id="panel-verdicts">
+      <h3 class="panel-title">◈ 军师裁定 · VERDICTS</h3>
+      <div id="verdicts"><p class="muted">尚无 Jev 判断。</p></div>
+    </div>
+
+    <div class="panel" id="panel-gate">
+      <h3 class="panel-title">◈ 决策闸门 · GATE</h3>
+      <div id="gate"><p class="muted">尚无闸门检查。（POST /api/gate）</p></div>
+      <div class="gate-meter" id="gate-meter"></div>
+    </div>
+
+    <div class="panel" id="panel-ledger">
+      <h3 class="panel-title">◈ 战争账簿 · LEDGER</h3>
+      <div class="ledger" id="ledger">
+        <div class="stat"><b id="st-jev">0</b><span>Jev 调用</span></div>
+        <div class="stat"><b id="st-actions">0</b><span>操作</span></div>
+        <div class="stat"><b id="st-tin">0</b><span>输入 tok</span></div>
+        <div class="stat"><b id="st-tout">0</b><span>输出 tok</span></div>
+      </div>
+    </div>
+
+    <div class="panel panel-dim">
+      <h3 class="panel-title">◈ 喂养指南 · FEED</h3>
+      <pre class="feed">curl -X POST localhost:8080/api/gate \
+  -d '{"turn":16,"snapshot":{...}}'     # 先过闸门
+# → should_ask=false: 不调 Jev，直接行动
+# → should_ask=true : 用返回的 questions
+#   定向调用 ↓ （只问触发的题）
+
+curl -X POST localhost:8080/api/jev \
+  -d '{"turn":16,"state":{...},
+       "questions":{...闸门返回的题...}}'</pre>
+    </div>
+  </aside>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,112 @@
+{
+  "state": {
+    "situation": "Ancient era, turn 12 of a Prince-difficulty Civ 6 game. Playing as Scythia (Tomyris) — civilization bonus: light cavalry gets a free copy and combat strength vs damaged units; no horses revealed yet.",
+    "empire": {
+      "cities": 1,
+      "capital": {
+        "name": "Pokrovka", "pop": 2,
+        "yields": {"food": 5, "production": 10, "gold": 6, "science": 3.0, "culture": 3.6},
+        "housing": 6, "amenities": 3,
+        "growth": "21 turns to next pop (SLOW GROWTH — needs farm, granary, or trade route)",
+        "defense": "HP 200/200, Defense 13, NO garrison unit",
+        "buildings": ["Monument", "Palace"],
+        "current_production": "UNIT_SETTLER, 7 turns remaining",
+        "unimproved_resources_in_range": ["IVORY", "COTTON", "NITER"]
+      },
+      "units": ["1 Warrior (combat strength 20, full movement) standing on Cotton tile (51,13)"],
+      "gold": 70, "gold_per_turn": 6,
+      "research": "NOTHING being researched (wasting all science)",
+      "civic": "Code of Laws, 2 turns left",
+      "explored": "2% of land"
+    },
+    "map_near_capital": {
+      "(51,13)": "PLAINS with COTTON (luxury), owned, warrior standing here",
+      "(53,12)": "GRASS_HILLS FOREST with IVORY (luxury), owned, river, unimproved, needs builder",
+      "(52,13)": "PLAINS_HILLS FOREST river, owned, production 3",
+      "(52,11)": "GRASS with STONE, UNOWNED (1 tile outside border)",
+      "(53,15)": "COAST tile nearby (city is NOT coastal)",
+      "(49,13)": "UNEXPLORED fog of war to the west",
+      "(51,12) & (52,14)": "impassable mountains"
+    },
+    "known_threats": "No barbarians or other civilizations sighted yet.",
+    "available_research": {
+      "TECH_POTTERY": "8 turns — unlocks GRANARY (+2 food, housing) — directly addresses slow growth",
+      "TECH_MINING": "8 turns — unlocks Mine, Quarry (IVORY/STONE nearby are mining-type improvements)",
+      "TECH_SAILING": "17 turns — naval units, fishing boats (only 1 coast tile seen, city not coastal)",
+      "TECH_ASTROLOGY": "17 turns — Shrine, Holy Site, Stonehenge (religion path)",
+      "TECH_ARCHERY": "17 turns — Archer (needs a Slinger kill for boost; no slinger yet)"
+    },
+    "city_production_options": {
+      "keep_UNIT_SETTLER": "7 turns left — found city #2, doubles empire output",
+      "switch_UNIT_BUILDER": "5 turns — improves IVORY/COTTON/NITER, boosts economy but delays expansion",
+      "switch_UNIT_SLINGER": "4 turns — early defense/ranged",
+      "switch_UNIT_WARRIOR": "4 turns — second melee defender",
+      "switch_UNIT_SCOUT": "3 turns — exploration"
+    }
+  },
+  "model": "jev-latest",
+  "questions": {
+    "turn_focus": {
+      "type": "choice",
+      "instructions": "What should this civilization's strategic priority be for the next ~10 turns?",
+      "criteria": {
+        "grow_economy": "Fix slow growth and low yields: farms, granary path, improvements",
+        "expand_settle": "Prioritize founding a second city (finish settler, find a site)",
+        "explore_map": "Reveal more of the map: meeting civs, city-states, finding settle spots and barbarians",
+        "build_defense": "Invest in military units before expansion (barbarian risk is real in this era)",
+        "develop_religion": "Rush a religion via Astrology and Holy Site"
+      }
+    },
+    "research_pick": {
+      "type": "choice",
+      "instructions": "Which technology should be set as the current research? Nothing is being researched right now, so any choice starts immediately.",
+      "criteria": {
+        "TECH_POTTERY": "8 turns, unlocks Granary which adds food+housing — best fix for the 21-turn slow growth",
+        "TECH_MINING": "8 turns, unlocks Mines for the owned IVORY hills (production 3) and nearby STONE",
+        "TECH_SAILING": "17 turns, naval — city is not coastal, low value now",
+        "TECH_ASTROLOGY": "17 turns, religion path — Shrine/Holy Site, but focus is not religion",
+        "TECH_ARCHERY": "17 turns, ranged military — no slinger exists to earn its boost"
+      }
+    },
+    "production_decision": {
+      "type": "choice",
+      "instructions": "The capital is 7 turns from completing a Settler (a new city roughly doubles long-term output, and expansion is scarce in the Ancient era). Should it keep the Settler or switch to something else this turn?",
+      "criteria": {
+        "keep_settler": "Stay on UNIT_SETTLER — expansion first",
+        "switch_builder": "Switch to UNIT_BUILDER (5 turns) — improve luxury resources first",
+        "switch_slinger": "Switch to UNIT_SLINGER (4 turns) — ranged defense",
+        "switch_warrior": "Switch to UNIT_WARRIOR (4 turns) — second defender"
+      }
+    },
+    "warrior_move": {
+      "type": "choice",
+      "instructions": "The Warrior (combat strength 20, 2 moves) is at (51,13) on the Cotton tile. The city has NO garrison. It is turn 12 with no enemies sighted. Pick this turn's move for the Warrior.",
+      "criteria": {
+        "west_into_fog": "Move to (49,13) plains — reveals unexplored fog westward, 2 tiles from city, still returns in 1 turn if needed",
+        "northwest_fog": "Move via (52,12) river grass toward NW fog — hillier scouting line, 2 tiles from city",
+        "hill_overwatch": "Move to (50,13) plains_hills — elevation vision toward west/southwest without going far",
+        "stay_garrison": "Stay/fortify on Cotton as city garrison — safe but wastes exploration time",
+        "south_coast": "Move toward (53,15) coast — reveals sea, lowest military urgency"
+      }
+    },
+    "after_settler_queue": {
+      "type": "choice",
+      "instructions": "SPECULATIVE — assume the Settler completes in 7 turns as planned. What should the capital queue immediately after it?",
+      "criteria": {
+        "UNIT_BUILDER": "Builder (5 turns) — improve IVORY/COTTON, boosting the capital that will run unimproved meanwhile",
+        "UNIT_SLINGER": "Slinger (4 turns) — ranged defense for two cities",
+        "UNIT_WARRIOR": "Warrior (4 turns) — melee defense for two cities",
+        "UNIT_SCOUT": "Scout (3 turns) — more exploration before military",
+        "UNIT_SETTLER": "Second Settler (7 turns) — aggressive 3-city opening"
+      }
+    },
+    "barbarian_risk": {
+      "type": "noul",
+      "instructions": "Given the state (turn 12, Prince difficulty, 2% map explored, no units or barbarians sighted yet, single city with no garrison and one melee unit), how likely is a barbarian threat to materialize within the next 10 turns such that it requires more military investment now?",
+      "criteria": {
+        "true": "Barbarians likely to appear and threaten the capital within 10 turns",
+        "false": "Risk is low enough that economy and expansion can take priority"
+      }
+    }
+  }
+}

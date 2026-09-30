@@ -1,0 +1,72 @@
+{
+ "model": "jev-1.13.0",
+ "answers": {
+  "turn_focus": {
+   "type": "choice",
+   "choice": "grow_economy",
+   "confidence": 0.41,
+   "probabilities": {
+    "build_defense": 0.0,
+    "grow_economy": 0.54,
+    "explore_map": 0.01,
+    "expand_settle": 0.45,
+    "develop_religion": 0.0
+   }
+  },
+  "research_pick": {
+   "type": "choice",
+   "choice": "TECH_POTTERY",
+   "confidence": 0.99,
+   "probabilities": {
+    "TECH_MINING": 0.01,
+    "TECH_ASTROLOGY": 0.0,
+    "TECH_ARCHERY": 0.0,
+    "TECH_POTTERY": 0.99,
+    "TECH_SAILING": 0.0
+   }
+  },
+  "production_decision": {
+   "type": "choice",
+   "choice": "keep_settler",
+   "confidence": 0.97,
+   "probabilities": {
+    "switch_warrior": 0.0,
+    "switch_slinger": 0.0,
+    "switch_builder": 0.02,
+    "keep_settler": 0.98
+   }
+  },
+  "warrior_move": {
+   "type": "choice",
+   "choice": "west_into_fog",
+   "confidence": 0.5,
+   "probabilities": {
+    "west_into_fog": 0.61,
+    "stay_garrison": 0.14,
+    "south_coast": 0.01,
+    "northwest_fog": 0.07,
+    "hill_overwatch": 0.17
+   }
+  },
+  "after_settler_queue": {
+   "type": "choice",
+   "choice": "UNIT_BUILDER",
+   "confidence": 0.42,
+   "probabilities": {
+    "UNIT_SETTLER": 0.21,
+    "UNIT_WARRIOR": 0.07,
+    "UNIT_BUILDER": 0.54,
+    "UNIT_SCOUT": 0.11,
+    "UNIT_SLINGER": 0.07
+   }
+  },
+  "barbarian_risk": {
+   "type": "noul",
+   "noul": 0.45
+  }
+ },
+ "usage": {
+  "input_tokens": 2218,
+  "output_tokens": 358
+ }
+}

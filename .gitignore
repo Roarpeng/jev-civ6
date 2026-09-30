@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+server.log
+journal.db
+civ6-mcp/
+.vscode/
+.idea/
