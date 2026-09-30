@@ -1,2 +1,9 @@
+# War-room server
 fastapi>=0.100
 uvicorn>=0.23
+
+# civ6-mcp bridge deps — the bridge source is loaded from ./civ6-mcp/src
+# (auto-added to PYTHONPATH); install these for the same interpreter that
+# runs the war-room.
+mcp>=2.0
+anthropic>=0.84.0

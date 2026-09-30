@@ -14,7 +14,8 @@ from pydantic import BaseModel, Field
 
 from .decision_gate import evaluate as gate_evaluate
 from .journal import Journal
-from .typesafe import system_one
+from .llm import judge as llm_judge
+from .config import load as load_config
 from .autopilot import AutoPilot
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -24,9 +25,9 @@ journal = Journal()
 
 
 class JevRequest(BaseModel):
-    state: object = Field(..., description="State object/string sent to Jev")
+    state: object = Field(..., description="State object/string sent to the judge")
     questions: dict = Field(..., description="Question id -> Question spec")
-    model: str = "jev-latest"
+    model: str | None = None  # None -> use the configured provider default
     turn: int | None = None
     meta: dict = {}
 
@@ -61,12 +62,13 @@ def index():
 def jev(req: JevRequest):
     """Gateway: perform the TypeSafe call, journal it, return the answers."""
     try:
-        resp, latency_ms = system_one(req.state, req.questions, req.model)
+        resp, latency_ms = llm_judge(req.state, req.questions, req.model or None)
         error = None
     except Exception as e:  # noqa: BLE001 — surface service errors to the log
         resp, latency_ms, error = None, None, str(e)
     event = {
-        "request": {"state": req.state, "questions": req.questions, "model": req.model},
+        "request": {"state": req.state, "questions": req.questions,
+                    "model": req.model or load_config().engine_summary()},
         "response": resp,
         "error": error,
         "latency_ms": latency_ms,
@@ -142,7 +144,7 @@ class ControlState:
 
 
 control = ControlState()
-pilot = AutoPilot(journal, gate_evaluate, system_one)
+pilot = AutoPilot(journal, gate_evaluate, llm_judge)
 pilot.on_pause = lambda: setattr(control, "mode", "manual")
 
 
@@ -185,11 +187,6 @@ async def get_mode():
     return {"mode": control.mode, **pilot.status_public()}
 
 
-@app.get("/api/mode")
-async def get_mode():
-    return {"mode": control.mode, **pilot.status_public()}
-
-
 @app.post("/api/mode")
 async def post_mode(req: ModeRequest):
     return await _set_mode(req.mode)
@@ -214,6 +211,14 @@ def stats():
     return journal.stats()
 
 
+@app.get("/api/config")
+def config_info():
+    """Non-secret config summary for the UI / debugging."""
+    cfg = load_config()
+    return {"source": cfg.source, "engine": cfg.engine_summary(),
+            "provider": cfg.llm.provider, "bridge_url": cfg.bridge.url}
+
+
 @app.get("/api/live")
 async def live():
     """Game liveness: the autopilot's own FireTuner link, else a direct TCP
@@ -236,4 +241,5 @@ app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("JEVCIV6_PORT", "8080")))
+    cfg = load_config()
+    uvicorn.run(app, host=cfg.server.host, port=cfg.server.port)

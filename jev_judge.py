@@ -1,50 +1,57 @@
-"""Thin TypeSafe judgment engine: POST a state+questions JSON to Jev, print typed answers.
+# -*- coding: utf-8 -*-
+"""Standalone judgment CLI — works with ANY configured LLM provider.
 
-Usage: python jev_judge.py request.json [answers.json]
-Reads TYPESAFE_API_KEY from environment.
+Usage:
+    python jev_judge.py request.json [answers.json]
+    python jev_judge.py request.json --provider openai --model gpt-4o-mini
+    python jev_judge.py request.json --provider mock        # offline dry run
+
+The request JSON has the same shape the war-room uses:
+    {"state": {...}, "questions": {...}, "model": "..."}
+
+Configuration comes from jevciv6.toml / environment (see server/config.py).
 """
-import json
-import os
-import sys
-import time
-import urllib.error
-import urllib.request
+from __future__ import annotations
 
-API_URL = "https://api.typesafe.ai/v1/systemone"
+import argparse
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # make `server` importable
+
+from server import config as cfgmod  # noqa: E402
+from server.llm import judge  # noqa: E402
 
 
 def main() -> None:
-    req_path = sys.argv[1]
-    out_path = sys.argv[2] if len(sys.argv) > 2 else None
-    with open(req_path, encoding="utf-8") as f:
+    ap = argparse.ArgumentParser(description="TypeSafe/OpenAI/Anthropic judgment CLI")
+    ap.add_argument("request", help="path to request JSON (state + questions)")
+    ap.add_argument("out", nargs="?", help="optional output path for the answers JSON")
+    ap.add_argument("--provider", help="override llm.provider (typesafe|openai|anthropic|mock)")
+    ap.add_argument("--model", help="override model name")
+    ap.add_argument("--config", help="path to jevciv6.toml (default: project root)")
+    args = ap.parse_args()
+
+    with open(args.request, encoding="utf-8") as f:
         payload = json.load(f)
-    payload.setdefault("model", "jev-latest")
+    state = payload.get("state")
+    questions = payload.get("questions") or {}
+    if not questions:
+        sys.exit("request JSON must contain a non-empty 'questions' object")
 
-    key = os.environ.get("TYPESAFE_API_KEY")
-    if not key:
-        sys.exit("TYPESAFE_API_KEY not set")
+    cfg = cfgmod.load(args.config)
+    if args.provider:
+        cfg.llm.provider = args.provider
+    model = args.model or payload.get("model") or None
 
-    body = json.dumps(payload).encode("utf-8")
-    for attempt in range(4):
-        try:
-            req = urllib.request.Request(
-                API_URL,
-                data=body,
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            )
-            with urllib.request.urlopen(req, timeout=60) as r:
-                resp = json.load(r)
-            break
-        except urllib.error.HTTPError as e:
-            if e.code in (429, 529) and attempt < 3:
-                time.sleep(2 ** attempt * 2)
-                continue
-            sys.exit(f"HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:500]}")
-
+    resp, latency_ms = judge(state, questions, model=model, cfg=cfg)
     out = json.dumps(resp, indent=1, ensure_ascii=False)
     print(out)
-    if out_path:
-        with open(out_path, "w", encoding="utf-8") as f:
+    print(f"\n[provider={cfg.llm.provider} model={resp.get('model')} latency={latency_ms}ms]",
+          file=sys.stderr)
+    if args.out:
+        with open(args.out, "w", encoding="utf-8") as f:
             json.dump(resp, f, indent=1, ensure_ascii=False)
 
 

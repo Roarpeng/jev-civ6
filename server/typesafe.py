@@ -17,7 +17,9 @@ API_URL = "https://api.typesafe.ai/v1/systemone"
 _fallback_key: str | None = None
 
 
-def _api_key() -> str:
+def _api_key(explicit: str | None = None) -> str:
+    if explicit:
+        return explicit
     global _fallback_key
     key = os.environ.get("TYPESAFE_API_KEY")
     if key:
@@ -46,13 +48,14 @@ def system_one(
     questions: dict,
     model: str = "jev-latest",
     timeout: float = 60.0,
+    api_key: str | None = None,
 ) -> tuple[dict, int]:
     """Call the System One API. Returns (response_dict, latency_ms)."""
     body = json.dumps(
         {"state": state, "model": model, "questions": questions}
     ).encode("utf-8")
     headers = {
-        "Authorization": f"Bearer {_api_key()}",
+        "Authorization": f"Bearer {_api_key(api_key)}",
         "Content-Type": "application/json",
     }
     last_err: Exception | None = None

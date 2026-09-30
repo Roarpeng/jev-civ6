@@ -1,0 +1,55 @@
+# jev-civ6 configuration — copy to `jevciv6.toml` and edit.
+# Everything is optional: a missing file / missing keys fall back to the
+# built-in defaults (which match the original hard-coded behavior).
+
+[llm]
+# Judgment provider: "typesafe" | "openai" | "anthropic" | "mock"
+provider = "typesafe"
+
+# Model name. Empty -> provider default (typesafe: "jev-latest").
+# model = "jev-latest"
+
+# --- Examples ---------------------------------------------------------------
+
+# Any OpenAI-compatible endpoint (OpenAI, DeepSeek, Moonshot Kimi, Qwen,
+# Ollama, vLLM, LM Studio, ...):
+# provider = "openai"
+# base_url = "https://api.openai.com/v1"        # or http://127.0.0.1:11434/v1
+# model = "gpt-4o-mini"
+# api_key_env = "OPENAI_API_KEY"                # or api_key = "sk-..." (not recommended)
+
+# Anthropic:
+# provider = "anthropic"
+# model = "claude-sonnet-4-5"
+# api_key_env = "ANTHROPIC_API_KEY"
+
+# Offline dry-run (deterministic first-choice answers, no network):
+# provider = "mock"
+
+# timeout_s = 60.0
+# max_retries = 3
+# temperature = 0.2
+
+[bridge]
+# Python interpreter used to spawn the civ6-mcp bridge.
+# Empty -> the same interpreter that runs the war-room.
+# python = "C:\\Python313\\python.exe"
+# module = "civ_mcp"
+# url = "http://127.0.0.1:8000"
+# game_port = 4318
+# ready_timeout_s = 90.0
+# src_path = "civ6-mcp/src"     # auto-detected when the vendored folder exists
+
+[autopilot]
+# takeover_on_start = true      # Windows: kill other python FireTuner holders first
+# sentinel_interval_s = 1.0     # monitoring cadence while the AI processes turns
+# sentinel_cooldown_s = 6.0
+# fail_limit = 3
+# end_turn_http_timeout_s = 90.0
+# turn_wait_timeout_s = 900.0   # max wait for one turn before pausing loudly
+# stall_limit_s = 1800.0        # no-progress watchdog (anti-spin fuse)
+# auto_decline_deals = true     # auto-decline incoming trade deals to unblock
+
+[server]
+# host = "127.0.0.1"
+# port = 8080

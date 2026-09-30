@@ -43,12 +43,13 @@ class Journal:
         if turn is None:
             turn = data.get("turn")
         payload = json.dumps(data, ensure_ascii=False)
+        ts = _now()
         with self._lock, self._connect() as c:
             cur = c.execute(
                 "INSERT INTO events (ts, turn, type, data) VALUES (?, ?, ?, ?)",
-                (_now(), turn, type, payload),
+                (ts, turn, type, payload),
             )
-            return {"id": cur.lastrowid, "ts": _now()}
+            return {"id": cur.lastrowid, "ts": ts}
 
     def events(
         self,

@@ -1,19 +1,23 @@
-"""Decision gate: pure code rules that decide WHEN Jev is worth calling.
+"""Decision gate: pure code rules that decide WHEN the LLM judge is worth calling.
 
-The orchestrator posts each fresh snapshot to POST /api/gate. The gate diffs it
+The autopilot posts each fresh snapshot to POST /api/gate. The gate diffs it
 against the previous snapshot and fires only on real decision points. When no
-trigger fires, no Jev call is made at all — judgment budget is spent only where
-a typed answer changes what the code does next.
+trigger fires, no judgment call is made at all — judgment budget is spent only
+where a typed answer changes what the code does next.
 
 Triggers (deterministic, zero API cost):
   research_idle   — no tech/civic progressing or just completed
   civic_idle      — no civic being progressed
   production_idle — a city has nothing in the build queue
-  new_threat      — enemy/barbarian unit sighted that was not in the previous snapshot
-  settler_idle    — a settler stands idle (site choice needed)
+  new_threat      — hostile unit sighted that was not in the previous snapshot
+  settler_idle    — an idle settler exists AND settle candidates were provided
   policy_slot     — empty policy slot (flagged; resolvable by code, no question)
+
+Question instructions refer to the judge-state object the autopilot sends
+(state.situation / state.empire / state.threats / state.settle_candidates /
+state.available) — keep those keys in sync with autopilot.build_judge_state().
 """
-from typing import Any
+from __future__ import annotations
 
 
 def _is_idle(name, turns_left) -> bool:
@@ -45,6 +49,7 @@ def _threat_key(t: dict) -> tuple:
 
 
 def evaluate(snapshot: dict, prev_snapshot: dict | None) -> dict:
+    """Return {should_ask, triggers, question_ids, questions, skip_reason}."""
     triggers: list[str] = []
     questions: dict[str, dict] = {}
     available = snapshot.get("available") or {}
@@ -58,8 +63,9 @@ def evaluate(snapshot: dict, prev_snapshot: dict | None) -> dict:
                 "type": "choice",
                 "instructions": (
                     "No technology is being researched, so all science is wasted. "
-                    "Which technology should be set now, given the empire state in "
-                    "`empire` and the map in `terrain`?"
+                    "Which technology should be set now? Consider the empire in "
+                    "`state.empire` and any threats in `state.threats`; the "
+                    "criteria list contains every currently researchable tech."
                 ),
                 "criteria": {
                     (t.get("id") if isinstance(t, dict) else t):
@@ -77,7 +83,8 @@ def evaluate(snapshot: dict, prev_snapshot: dict | None) -> dict:
                 "type": "choice",
                 "instructions": (
                     "No civic is being progressed. Which civic should be set now, "
-                    "considering `focus` and current military/economic needs?"
+                    "given the empire in `state.empire`? The criteria list "
+                    "contains every currently available civic."
                 ),
                 "criteria": {
                     (c.get("id") if isinstance(c, dict) else c):
@@ -86,25 +93,36 @@ def evaluate(snapshot: dict, prev_snapshot: dict | None) -> dict:
                 },
             }
 
-    # 3. A city with an empty production queue.
-    idle_cities = [
-        c for c in (snapshot.get("cities") or [])
-        if not (c.get("production") or "").strip()
-    ]
-    prod_options = available.get("production_options") or []
-    if idle_cities and prod_options:
-        city = idle_cities[0]
+    # 3. Cities with an empty production queue (options are per-city).
+    prod_by_city = {
+        entry.get("city_id"): entry
+        for entry in (available.get("production_by_city") or [])
+        if isinstance(entry, dict)
+    }
+    first_idle = True
+    for c in (snapshot.get("cities") or []):
+        if (c.get("production") or "").strip():
+            continue
+        entry = prod_by_city.get(c.get("city_id"))
+        options = (entry or {}).get("options") or []
+        if not options:
+            continue
         triggers.append("production_idle")
-        questions["production_pick"] = {
+        qid = "production_pick" if first_idle else f"production_pick:{c.get('city_id')}"
+        first_idle = False
+        questions[qid] = {
             "type": "choice",
+            "city_id": c.get("city_id"),
             "instructions": (
-                f"City `{city.get('name', '?')}` has nothing in production. "
-                "What should it build, considering growth, defense and `focus`?"
+                f"City `{c.get('name', '?')}` has NOTHING in production; every "
+                "turn without a build order wastes its production. What should "
+                "it build now, weighing growth, defense and the threats in "
+                "`state.threats`?"
             ),
             "criteria": {
                 (o.get("id") if isinstance(o, dict) else o):
                 (o.get("desc") if isinstance(o, dict) else "")
-                for o in prod_options
+                for o in options
             },
         }
 
@@ -117,9 +135,10 @@ def evaluate(snapshot: dict, prev_snapshot: dict | None) -> dict:
         questions["threat_response"] = {
             "type": "noul",
             "instructions": (
-                "A new hostile unit was sighted (see `threats` — the fresh entries "
-                "were not present last check). Given `units` and city defense, must "
-                "military units react this turn instead of their current orders?"
+                "New hostile units were just sighted (fresh entries in "
+                "`state.threats`). Given our units in `state.empire.units` and "
+                "the city defense situation, must military units react to the "
+                "threat this turn instead of continuing their current orders?"
             ),
             "criteria": {
                 "true": "Threat warrants diverting units toward it this turn",
@@ -127,22 +146,19 @@ def evaluate(snapshot: dict, prev_snapshot: dict | None) -> dict:
             },
         }
 
-    # 5. Idle settler → where to settle (only if candidates were provided).
-    idle_settler = any(
-        "SETTLER" in str(u.get("type", "")).upper()
-        for u in (snapshot.get("units") or [])
-    )
+    # 5. Settle candidates were provided → where should the settler found?
     candidates = snapshot.get("settle_candidates") or []
-    if idle_settler and candidates:
+    if candidates:
         triggers.append("settler_idle")
         questions["settle_pick"] = {
             "type": "choice",
             "instructions": (
-                "A settler is idle. Choose the best site from `settle_candidates` "
-                "(water, yields, distance, safety)."
+                "Our settler should found the next city. Choose the best site "
+                "from `state.settle_candidates` (fresh water, resources, "
+                "defense, distance to the capital)."
             ),
             "criteria": {
-                (c.get("id") if isinstance(c, dict) else str(c)):
+                (f"{c.get('x')},{c.get('y')}" if isinstance(c, dict) else str(c)):
                 (c.get("desc") if isinstance(c, dict) else "")
                 for c in candidates
             },
@@ -153,10 +169,7 @@ def evaluate(snapshot: dict, prev_snapshot: dict | None) -> dict:
     if any("policy slot" in n for n in notes):
         triggers.append("policy_slot")
 
-    skip_reason = (
-        "no decision point in snapshot delta" if not questions
-        else None
-    )
+    skip_reason = "no decision point in snapshot delta" if not questions else None
     return {
         "should_ask": bool(questions),
         "triggers": triggers,

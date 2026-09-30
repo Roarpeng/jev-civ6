@@ -381,8 +381,11 @@ function renderMode(m) {
     pilotChip.classList.remove("hidden");
     pilotChip.classList.add("chip-pilot-on");
     const step = (m.step || "running").replace(/_/g, " ");
+    let extra = "";
+    if (m.blocker) extra += ` · 阻塞:${m.blocker}`;
+    if (m.waiting_s != null) extra += ` · 等待 ${Math.round(m.waiting_s)}s`;
     $("#pilot-step").textContent =
-      `AUTO · ${step}${m.turn ? " · T" + m.turn : ""}` +
+      `AUTO · ${step}${extra}${m.turn ? " · T" + m.turn : ""}` +
       (m.cycles ? ` · ${m.cycles} 回合` : "");
   } else {
     pilotChip.classList.add("hidden");
