@@ -21,3 +21,4 @@ artifacts/
 # OS
 Thumbs.db
 .DS_Store
+graphflow-out/
