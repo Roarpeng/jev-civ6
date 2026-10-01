@@ -57,10 +57,18 @@ class AutopilotConfig:
     sentinel_interval_s: float = 1.0
     sentinel_cooldown_s: float = 6.0
     fail_limit: int = 3
-    end_turn_http_timeout_s: float = 90.0   # http timeout for one end_turn call
+    end_turn_http_timeout_s: float = 60.0   # http timeout for one end_turn call
+    narration_grace_s: float = 0.5          # wait for bridge narration AFTER the turn
+                                           # already advanced (fast end_turn returns
+                                           # promptly, so this is only a fallback)
     turn_wait_timeout_s: float = 900.0    # max seconds to wait for one turn to advance
     stall_limit_s: float = 1800.0          # no-progress watchdog per turn
     auto_decline_deals: bool = True       # decline incoming trade deals to unblock
+    timeout_blocker_after: int = 4        # N consecutive end_turn no-advance returns
+                                           # (each ≈ fast poll cap) before proactively
+                                           # dismissing popup + skipping unit moves;
+                                           # ~86s at the 20s fast cap, past the point
+                                           # where a normal AI turn would be done
 
 
 @dataclass
@@ -109,7 +117,7 @@ def _apply_toml(cfg: Config, data: dict) -> None:
 
     ap = data.get("autopilot") or {}
     for key in ("sentinel_interval_s", "sentinel_cooldown_s", "end_turn_http_timeout_s",
-                "turn_wait_timeout_s", "stall_limit_s"):
+                "narration_grace_s", "turn_wait_timeout_s", "stall_limit_s"):
         if key in ap:
             setattr(cfg.autopilot, key, float(ap[key]))
     for key in ("fail_limit",):
@@ -118,6 +126,8 @@ def _apply_toml(cfg: Config, data: dict) -> None:
     for key in ("takeover_on_start", "auto_decline_deals"):
         if key in ap:
             setattr(cfg.autopilot, key, bool(ap[key]))
+    if "timeout_blocker_after" in ap:
+        cfg.autopilot.timeout_blocker_after = int(ap["timeout_blocker_after"])
 
     sv = data.get("server") or {}
     if "host" in sv and sv["host"]:

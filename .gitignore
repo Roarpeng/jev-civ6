@@ -1,8 +1,23 @@
+# Python
+.venv/
 __pycache__/
 *.py[cod]
-server.log
+*.egg-info/
+.pytest_cache/
+
+# Runtime state (game session specific — do not commit)
+autopilot_state.json
 journal.db
-civ6-mcp/
+server.log
+artifacts/
+*.log
+
+# Local caches / IDE
+.graphflow-cache/
+.zcode/
 .vscode/
 .idea/
-.venv/
+
+# OS
+Thumbs.db
+.DS_Store

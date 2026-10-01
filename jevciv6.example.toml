@@ -45,7 +45,12 @@ provider = "typesafe"
 # sentinel_interval_s = 1.0     # monitoring cadence while the AI processes turns
 # sentinel_cooldown_s = 6.0
 # fail_limit = 3
-# end_turn_http_timeout_s = 90.0
+# end_turn_http_timeout_s = 60.0
+# narration_grace_s = 2.0       # wait for bridge narration AFTER the turn already
+#                               # advanced — keep small: big values are pure latency
+# timeout_blocker_after = 4     # N consecutive no-advance end_turn returns (~20s each
+#                               # in fast mode) → proactively dismiss popup + skip
+#                               # remaining unit moves (unblocks stuck turns)
 # turn_wait_timeout_s = 900.0   # max wait for one turn before pausing loudly
 # stall_limit_s = 1800.0        # no-progress watchdog (anti-spin fuse)
 # auto_decline_deals = true     # auto-decline incoming trade deals to unblock

@@ -58,6 +58,34 @@ class ClassifyTests(unittest.TestCase):
                               "Trajan. Use respond_to_diplomacy to handle it."),
             "diplomacy")
 
+    def test_great_person_classification(self):
+        self.assertEqual(
+            classify_end_turn("Cannot end turn: great person available to "
+                              "claim. Use get_great_people() then "
+                              "recruit_great_person(individual_id=...)."),
+            "great_person")
+
+    def test_dedication_classification(self):
+        self.assertEqual(
+            classify_end_turn("Cannot end turn: dedication available "
+                              "(commemoration). Use get_dedications() then "
+                              "choose_dedication(dedication_index=...)."),
+            "dedication")
+        self.assertEqual(
+            classify_end_turn("End turn blocked (turn 130): Blocker: "
+                              "Commemoration Available (choose dedication)"),
+            "dedication")
+
+    def test_fast_end_turn_strings(self):
+        ok = ("Turn 40 -> 41 | fast end_turn — narration/autosave skipped "
+              "(war-room monitors via turnstate)")
+        self.assertEqual(classify_end_turn(ok), "ok")
+        self.assertEqual(parse_turn_advance(ok, 40), 41)
+        self.assertEqual(
+            classify_end_turn("FAST_NO_ADVANCE: end turn still processing "
+                              "(turn 41) — request stays in flight"),
+            "timeout")
+
 
 class HelperTests(unittest.TestCase):
     def test_hex_distance(self):

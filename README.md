@@ -4,11 +4,15 @@
 可观测的自动化游戏工作流：代码负责收集状态与执行动作，LLM 在决策点做语义判断，
 本项目的 WebUI 负责把每一次判断、每一次操作、每一份国势快照记录成可回溯的战争编年史。
 
-> **v2 更新（本次完善）**：主循环改为「监控式等待」——1 秒级探测回合状态，
-> 回合一结束立即行动；世界议会 / 交易 / 外交等回合阻塞会被自动分类处理；
-> 新增防卡死看门狗；LLM 后端可在 `jevciv6.toml` 中自选
-> （TypeSafe Jev / OpenAI 兼容 / Anthropic / 离线 mock）；环境用 uv 一键创建
-> （`uv sync`）。详见文末「本次改造摘要」。
+> **仓库结构说明**：本仓库是**单仓双件**——`server/`（战争议事厅，本项目的决策与自治层）
+> + `civ6-mcp/`（**桥进程本体**，`python -m civ_mcp`，被 war-room 作为子进程拉起并独占
+> FireTuner 连接）。**civ6-mcp 不是遗留物**：本仓库对它做了大量针对性改造
+> （批量 Lua 往返、end_turn 快速路径、政策/外交/议会修复等），两者互相依赖、缺一不可。
+> 桥的原始上游是 [lmwilki/civ6-mcp](https://github.com/lmwilki/civ6-mcp)（v1.1.11），
+> 致谢 👏；本仓库内的版本包含大量本地改动，请勿混用上游版本。
+>
+> ⚠️ **运行前提的硬规则**（踩坑沉淀，详见下文「关键运维规则」）：
+> 读档前 bridge 必须已连上 tuner；同机只跑一个 war-room。
 
 ```text
                  ┌──────────────────────────────────────────────┐
@@ -27,6 +31,13 @@
                  │ · 崩溃自动重连        │
                  └──────────────────────┘
 ```
+
+**决策自治能力一览**（Auto 模式下全部自动处理，无需人工）：
+研究/市政/生产选择、单位战术（攻击/撤退/驻守）、开拓者定居规划、工人改良、
+政策槽填补、总督任命与派驻、伟人招募、宗教创建与传教引擎、
+世界议会投票、AI 交易与和平提议（接受/拒绝由 LLM 判断）、
+外交问答、时代献礼选择、使节派遣、忠诚度/住房/舒适度预警、
+跨边境传教的开放边境提议、以及各种回合阻塞的自动解锁。
 
 ## 快速开始（uv 环境，独立运行，不依赖 ZCode）
 
@@ -56,6 +67,27 @@ uv run python seed.py
 桥进程（`python -m civ_mcp`）由 war-room 自动 spawn，默认使用**与服务器同一个解释器**
 （即 `.venv`——`uv sync` 已把 civ6-mcp 以 editable 方式装好）；万一未装，也会自动把
 `./civ6-mcp/src` 注入 PYTHONPATH 兜底。Python 版本要求 ≥ 3.12。
+
+### ⚠️ 关键运维规则（2026-10-01 事故沉淀）
+
+1. **加载存档前，bridge 必须已连上 tuner。** Civ6 只在存档加载（Lua 上下文创建）
+   那一刻把 `InGame`/`GameCore_Tuner` 注册给 tuner；如果加载时没有任何客户端连着，
+   这些上下文**永远不会暴露**——游戏画面正常但 bridge 无法操作（握手只见前端状态）。
+   正确顺序：先开 war-room（bridge 连上主菜单状态的游戏）→ 再读档。
+   验证/修复工具：`scripts/tuner_keeper.py`（保持一条连接并轮询状态列表，
+   出现 InGame+GameCore_Tuner 即退出码 0）。
+2. **tuner 客户端配额会被死连接耗尽。** 游戏侧的 tuner 只放行有限个客户端且
+   不回收半死连接（CLOSE_WAIT 堆积后新连接直接 WinError 1225 拒绝）。反复
+   spawn/杀 bridge 会自我耗尽配额——唯一解法是重启游戏进程。
+3. **同一台机只跑一个 war-room。** 多个 war-room 实例会互相 takeover 对方的
+   bridge（`_takeover_once` 杀"竞争控制器"），表现为 `bridge not ready after 90s`。
+   检查：`netstat -ano | findstr :8081` 是否只有一个 LISTEN，以及是否存在
+   未绑定端口的孤儿 uvicorn 进程。
+4. **游戏意外退出后的恢复顺序**：启动 war-room → AUTO（bridge 连上主菜单）→
+   游戏内手动/自动化读档（读档瞬间 bridge 必须在线）→ 回合恢复推进。
+   本仓恢复实例：杀游戏 → Epic 协议拉起（`com.epicgames.launcher://apps/Kinglet?action=launch&silent=true`）
+   → 主菜单 CONTINUE → 选 auto 存档行 → LOAD。
+
 
 ## LLM 配置（jevciv6.toml）
 
@@ -135,10 +167,17 @@ WebUI 顶栏滑动块切换控制权（`GET/POST /api/mode`）：
 4. **执行**（已接线到动作白名单）：
    - `research_pick` → `set_research`；`civic_pick` → `set_civic`
    - `production_pick`（按城）→ `set_city_production`（区划自动带顾问推荐地块）
-   - `threat_response ≥0.5` → 优先引擎确认可打的 `attack_unit`；否则最多两台单位
-     向最近威胁推进一格（睡着先唤醒、被阻挡改 fortify、同回合同一移动不重复）
+   - `tactics:{unit_index}`（**v2.1，每个军事单位一道选择题**）→ 选项由引擎验证：
+     `attack:x,y`（可打目标+敌血量/战力）→ `attack_unit`；`advance` → 向最近威胁
+     移动一格；`fortify` → 驻守回血；`retreat`（重伤时出现）→ 向城市撤退。
+     没被提问的其余军事单位默认 `fortify`（回血+防御，不再挂机）。
+     （v2.0 的单比特 `threat_response` noul 已移除——0.5 阈值下的边缘答案
+     曾导致连续多回合完全不动。）
    - `settle_pick` → 建立"定居计划"：逐回合向目标格移动，抵达后 `found_city`
-5. **结束回合**：监控式 `end_turn`（见上）；5 项反思由桥的叙事返回。
+5. **结束回合**：监控式 `end_turn`（见上）；回合一推进，桥的叙述只等
+   `narration_grace_s`（默认 5s，原为硬编码 20s——那曾是每回合最大延迟来源）；
+   连续 `timeout_blocker_after`（默认 2）次超时无推进 → 主动
+   dismiss popup + skip remaining units（解决"单位还有移动力"型卡死）。
 
 ## WebUI 说明（http://127.0.0.1:8080）
 
@@ -218,13 +257,109 @@ jev-civ6/
 - **SQLite 而非 JSONL**：单文件零依赖，按类型/游标查询是 UI 第一需求。
 - **可回滚**：项目已初始化 git，本次改造前的基线在首个提交中；备份见工作区。
 
+## 走向胜利的能力栈（v2.6）
+
+- **胜利路线战略层**：无策略/每 30 回合/换新局时问 Jev 五选一（科技/文化/
+  统治/宗教/外交），存入 `autopilot_state.json` 跨重启持久；此后每道
+  科研/市政/生产/定居/政策题都附带战略提示，选择不再互相打架。
+- **政策卡审查**：游戏会预填默认政策（槽永远"非空"），所以按
+  15 回合周期让 Jev 复审每个槽位（当前卡带 `(current)` 标记，可保留可换），
+  换卡合并为一次 `set_policies` 调用。实测 T112 首审：纪律→边防军。
+- **使者派遣**（v2.7）：收集端点携带城邦与令牌余额（`SECTION|cs` 零额外
+  往返），有令牌即问 `envoy_pick`（每个城邦列出类型/我方使者数/宗主国），
+  执行 `send_envoy`。实测 T113-T114 连续向同一城邦集中派遣冲宗主门槛。
+- **时代着力点**（v2.9）：新时代的 Dedication 强制选择屏由 fast end_turn
+  入场门禁捕获（`selections_allowed > 0`），Jev 按时代类型（黑暗/黄金/普通
+  影响加成文案）结合胜利路线选择着力点并 `choose_dedication`。实测 T123：
+  宗教路线 → COMMEMORATION_RELIGIOUS，弹窗即解。
+- **问题型外交会话**（v2.17）：无枚举选项、只有台词的会话（如"允许建立
+  大使馆吗？"）EXIT 关不掉——Jev 判定接受/拒绝后按 **交易应答 → ACCEPT/
+  DECLINE → CHOICE_POSITIVE/NEGATIVE → EXIT** 兜底链执行，每步后验证会话
+  真实关闭。实测：印尼大使馆请求 → DEAL_ACCEPTED,回合立即恢复。
+- **外交/交易 Jev 决策**（v2.7）：交易阻塞不再盲目全拒——结构化读取
+  pending deals（对方给什么/我们要给什么），`deal_response` 由 Jev 判断
+  （使团/开放边境/公平交易通常值得接受）；外交会话有真实选项时
+  （如结好请求）由 Jev 选择应答，纯告别屏仍自动关闭。判定失败回退旧行为。
+- **建筑工经济层**（确定性反射,零 LLM）：闲置 builder 站上可改良格→直接
+  `improve_tile`；否则走向最近未改良资源格（排除城市中心与被占格）。
+  实测 T99 采石场、T103 营地——首次改良产出。
+- **创教全流程**（v2.14）：`_advance_prophet` 反射层——预言家自动走向我方
+  圣地格 → `activate_great_person` 激活 → 查询创教状态 → Jev 选宗教名+
+  创始人信条+信徒信条 → `found_religion`；万神殿缺失时顺路 Jev 选择。
+  创教标志持久化跨重启。实测 T162 预言家登圣殿格、T163 激活、
+  T170 **佛教创立**（教皇权威+神灵的启示——与城邦使者战略协同）。
+- **忠诚度/宜居度感知与应对**（v2.15）：城市快照携带 loyalty/amenities，
+  生产题注入舒适度警报（忠诚<70 会翻独立警告、宜居不足提示娱乐/奢侈，
+  城市数<3 时强调开拓者）；总督维护反射自动驻派未上任总督（**一城一总督**
+  +每回合一次节流——驻派是异步的，不节流会用旧状态把自己的总督顶掉）。
+  本战役教训：波季因无人管理忠诚而独立。
+- **常驻事件框架**（v2.5）+ 战术批处理（v2.4）+ fast end_turn（v2.2-2.3）
+  见下文延迟优化记录。
+
 ## 已知边界与后续可做
 
 - 世界议会投票目前用桥的**默认策略**（选项 A、摊开 favor；先保证不卡死），
   后续可在有 favor 时把决议内容交给 LLM 判断。
 - 政策卡槽（policy_slot）目前只标记不自动填——`set_policies` 已存在于桥，
   但需要一套"选卡"判断，建议下一轮做。
-- 移动/攻击的路径智能有限（引擎验证 + 一格推进）；更复杂的军事 AI 值得单独立项。
+- 战术选择题每次最多覆盖 4 个军事单位（`TACTICS_UNIT_CAP`，控 token 成本）；
+  大军团时其余单位默认驻守。更聪明的多单位协同（集火、夹击、地形）值得单独立项。
+- 移动/攻击的路径智能有限（引擎验证 + 一格推进）；`retreat` 只退向第一座城。
+
+## 延迟优化记录（v2.2/v2.3）
+
+FireTuner 是单连接串行通道（桥内全局锁，实测每次 Lua 往返 ~1s），一切优化
+都围绕"减少往返次数、不霸占通道"：
+
+1. **end_turn(fast)**（v2.2）：入场快速检查后发令，回合一推进立即返回；
+   不做快照差分/游戏内存档/通知/威胁扫描（那套收割曾独占通道 20-40s，
+   把后续指令全部堵死——"操作要等 20s"的直接元凶）。AI 回合超 20s 未推进时
+   返回 `FAST_NO_ADVANCE`，重试不发重复指令（in-flight 防重）。
+2. **叙述宽限期**：20s（硬编码）→ `narration_grace_s`（默认 2s）。
+3. **指令批处理**（v2.3）：`move_unit` 5 次往返 → 2 次（弹窗清扫 Lua 免费
+   前置拼接 + 位置/视野合成单个 GameCore 查询，视野以 Lua 侧取单位实际
+   落点为中心）；`attack_unit` 5 次往返 → 2 次（弹窗清扫 + 战斗预估 + 攻击
+   合成一段脚本）。
+4. **全量批处理**（v2.4）：
+   - 收集：桥新增 `/api/warroom_collect`——五路状态（overview/units/cities/
+     tech/threats）合并为 **2 次** Lua 往返（InGame + GameCore 各一段，
+     SECTION 标记切分后喂给原有解析器），实测 ~3.5-5s。
+   - 行军：`move_units_batch`——N 个单位的移动、位置回读、视野差分全部
+     压进 **2 次**往返（每单位 pcall 包裹，一个失败不影响整批）。
+   - 驻守：`fortify_units`——N 个单位一次往返。
+   - 实测：一整回合的决策面（收集+判定+生产+攻击+行军+驻守）约 **7 秒**
+     完成；"回合可操作 → 首个动作执行" 约 5-6 秒。回合总时长此后由
+     游戏 AI 计算时间主导（~25-35s），不再是 war-room 的开销。
+5. **preflight 五合一**（v2.10）：fast end_turn 的入场检查（存活/外交会话/
+   待处理交易/世界议会临近+handler/着力点待选）合并为**一次往返**的
+   `PF|` 探针，具体项的全量检查只在旗标触发时执行——入场从 ~7 次往返
+   降到 3 次。实测 end_turn→下一回合收集从 26s 降到 4-8s；战术题上限
+   4→8（单次判定覆盖全部单位）；叙述宽限 2s→0.5s。
+6. **大伟人领取**（v2.11）：preflight 用 `gp:CanRecruitPerson` 计数可领取
+   伟人（零额外往返），入场门禁触发后 Jev 按能力描述+战略提示选择领取
+   （宗教路线明确标注大预言家关键）。实测 T142：Jev 领取大预言家琐罗亚斯德，
+   回合立即恢复。无可领对象时的赞助弹窗自动拒绝兜底。
+7. **政策槽位强制填补**（v2.12）：preflight 计数空槽（`GetSlotPolicy(s)<0`，
+   零额外往返）→ 阻塞文案 → Jev 逐空槽选卡（兼容卡过滤+战略提示）→ 一次
+   `set_policies` 填满。实测 T150：Jev 为宗教路线选 POLICY_SCRIPTURE（经文）。
+8. **总督头衔**（v2.13）：preflight 用 `GetGovernorPoints()−GetGovernorPointsSpent()`
+   （**累计−已花费**，直接用原值会误报）计数可用头衔 → Jev 选总督任命（宗教
+   路线选了莫克夏/信仰总督）→ **自动驻派首都**（任命是异步的且总监屏要求
+   驻派城市才关闭）→ 晋升路径同理。三处竞态实测修复。
+9. **决策面三秒化**（v2.16）：①收集端点支持 `?pol=1&cs=1&gov=1` 按需段——
+   政策/城邦/总督等低频数据只在事件提示或周期到点时拉取（tech/threats 实证
+   不能并入 InGame 上下文，保持 GameCore 段）；②preflight 吸收弹窗清扫，
+   end_turn 入场 3 往返 → 2；③policy_fill/governor 等异步动作统一"结算等待
+   +盖章"防重触发。实测决策周期（收集→判定→动作）12-15s → **3-5s**，
+   回合墙钟剩余部分为游戏 AI 计算时间。
+10. **超时保险丝**：连续 `timeout_blocker_after`（默认 4）次无推进 → 主动
+   dismiss + skip remaining units（"单位还有移动力"型卡死的兜底）。
+11. **常驻事件框架**（v2.5，`lua/warroom.py`）：桥向游戏 InGame 上下文注入
+   `__wr` 常驻框架——挂载精选事件钩子（回合/战斗/建城/科研/市政/外交…），
+   事件入环形缓冲，随收集端点**零额外往返**带回；首次注入还会用
+   `pairs(Events)` 枚举出本版本真实存在的事件名清单（实测 35 个）入账。
+   事件以 `game_event` 类型进编年史，并注入快照 notes 供闸门/Jev 参考。
+   自愈：上下文重载（读档/新局）后 `__wr` 消失 → 下次收集自动重注入。
 - `takeover_on_start` 的进程接管仅 Windows 有效；其他平台请手动确保没有别的
   FireTuner 持有者。
 - `turnstate` 的 `cities` 字段在个别版本可能返回 -1（探测不到）——监控不依赖它，
@@ -262,8 +397,35 @@ jev-civ6/
 ## 测试与自检
 
 ```bash
-uv run python -m unittest discover -s tests -v   # 30 tests: gate / autopilot / config+llm / executor
-uv run python scripts/dry_run_demo.py            # offline end-to-end pipeline demo
+uv run python -m pytest tests/ -q        # war-room: 57 tests
+cd civ6-mcp && uv run pytest tests/ -q   # bridge:  99 tests
+uv run python scripts/dry_run_demo.py    # offline end-to-end pipeline demo
 ```
 
-两个命令都不需要游戏本体与网络连接；任何改动后建议先跑这两个再上游戏。
+这些命令都不需要游戏本体与网络连接；任何改动后建议先跑这些再上游戏。
+
+## v3 改造摘要（2026-10-01 · 实战排障沉淀）
+
+一次完整战役（T217→T330+，宗教胜利路径）中暴露并修复的系统性问题：
+
+1. **FireTuner 生命周期三定律**（详见「关键运维规则」）：
+   - 游戏的 tuner 客户端配额会被死连接耗尽（CLOSE_WAIT 堆积→WinError 1225），
+     唯一解法是重启游戏；bridge 反复 spawn/杀会自我耗尽配额。
+   - **读档瞬间必须有 tuner 客户端在线**，否则 `InGame`/`GameCore_Tuner`
+     上下文永不注册（游戏画面正常但桥无法操作）。
+     工具：`scripts/tuner_keeper.py` 验证/恢复。
+   - 同机多 war-room 实例会互相 takeover 对方的桥（表现：`bridge not ready`）。
+2. **政策填充静默失败**：`UNLOCK_POLICIES` 与 `RequestPolicyChanges` 同帧提交会被
+   引擎丢弃。拆为「解锁→落定→提交→落定→读回验证→重试」序列（bridge 侧）。
+3. **世界议会卡回合**：会话开启但无人提交时 end_turn 永久"处理中"。
+   end_turn 超时熔断新增议会探测 + `submit_congress` 收尾（war-room 侧）。
+4. **外交两处盲区**：① 叙事文案 `AI diplomatic proposal` 未被分类器捕获（死循环）；
+   ② AI 求和/交易是 **无会话的 pending deal**（`HasPendingDeal`），旧查询看不见。
+   现由超时熔断统一探测（议会→交易）并路由到 LLM 决策处理器。
+5. **开拓者堵城**：无定居点时开拓者永站城市中心，阻断一切信仰购买
+   （STACKING_CONFLICT）。新增 park reflex 挪出城一格。
+6. **传播引擎优化**：宗教单位仅在城内/邻城时尝试传教；越境受阻时自动向
+   对方提议互开边境（每文明 20 回合节流，跳过交战国）。
+7. **杂项**：takeover 的 PowerShell 探测超时容忍（高负载下 PS 首启可超 15s）、
+   policy_fill 过时标志不再误暂停、错误自动截图（`artifacts/screenshots/`）。
+

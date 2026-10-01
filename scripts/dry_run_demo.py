@@ -99,8 +99,10 @@ def main() -> None:
             print(f"  set_civic(civic_name={ans.get('choice')})")
         elif qid.startswith("production_pick"):
             print(f"  set_city_production(city_id=65536, item_name={ans.get('choice')})")
-        elif qid == "threat_response":
-            print(f"  threat_response noul={ans.get('noul')} → attack/move units")
+        elif qid.startswith("tactics:"):
+            idx = qid.split(":", 1)[1]
+            print(f"  unit {idx}: {ans.get('choice')} → "
+                  f"attack_unit / move_unit / fortify_unit")
         elif qid == "settle_pick":
             print(f"  plan_settle(target={ans.get('choice')}) → move/found")
 
