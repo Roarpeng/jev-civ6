@@ -878,6 +878,9 @@ class AutoPilot:
         # (the defining move of the religion victory path)
         await self._advance_prophet(bridge, snapshot, snapshot["turn"])
 
+        # pantheon the moment faith allows (forced modal unblock)
+        await self._ensure_pantheon(bridge, snapshot["turn"])
+
         # religion spread engine: buy missionaries/apostles with faith,
         # spread when in position, walk toward known foreign cities
         await self._spread_religion(bridge, snapshot, snapshot["turn"])
@@ -1397,6 +1400,47 @@ class AutoPilot:
         self._religion_founding_started = True
         await asyncio.sleep(1.5)
         await self._found_religion(bridge, turn)
+
+    async def _ensure_pantheon(self, bridge: Bridge, turn: int) -> None:
+        """Choose a pantheon the moment faith allows it.
+
+        The faith>=25 pantheon is a FORCED modal that blocks the turn long
+        before a Great Prophet shows up — the old flow only picked it during
+        religion founding. Runs every decide cycle; no-ops once chosen.
+        """
+        try:
+            st = await asyncio.to_thread(bridge.act_data,
+                                         "get_pantheon_status", {})
+        except Exception:  # noqa: BLE001
+            return
+        if not isinstance(st, dict):
+            return
+        if st.get("has_pantheon"):
+            return
+        beliefs = st.get("available_beliefs") or []
+        if not beliefs:
+            return
+        ans = await self._ask_judge_inline(
+            {"pantheon_pick": {
+                "type": "choice",
+                "instructions": (
+                    "Pick our PANTHEON belief (first faith milestone; "
+                    "boosts our empire broadly — terrain synergy first)."),
+                "criteria": {
+                    b.get("belief_type", str(i)):
+                        f"{b.get('name', '?')} — "
+                        f"{str(b.get('description') or '')[:100]}"
+                    for i, b in enumerate(beliefs)
+                    if isinstance(b, dict)
+                },
+            }}, turn, situation="Pantheon belief")
+        pick = (ans or {}).get("pantheon_pick", {}).get("choice")
+        if not pick and beliefs:
+            b0 = beliefs[0]
+            pick = b0.get("belief_type") if isinstance(b0, dict) else None
+        if pick:
+            await self._act(bridge, "choose_pantheon",
+                            {"belief_type": str(pick)}, turn)
 
     async def _found_religion(self, bridge: Bridge, turn: int) -> None:
         try:

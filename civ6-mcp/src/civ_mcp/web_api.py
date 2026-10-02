@@ -73,6 +73,7 @@ ACTION_TOOLS = {
     "get_religion_founding_status": (),
     "found_religion": ("religion_type", "follower_belief", "founder_belief"),
     "choose_pantheon": ("belief_type",),
+    "get_pantheon_status": (),
     "recruit_great_person": ("individual_id",),
     "patronize_great_person": ("individual_id", "yield_type"),
     "reject_great_person": ("individual_id",),
