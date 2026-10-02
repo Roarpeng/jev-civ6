@@ -5,14 +5,15 @@
 本项目的 WebUI 负责把每一次判断、每一次操作、每一份国势快照记录成可回溯的战争编年史。
 
 > **仓库结构说明**：本仓库是**单仓双件**——`server/`（战争议事厅，本项目的决策与自治层）
-> + `civ6-mcp/`（**桥进程本体**，`python -m civ_mcp`，被 war-room 作为子进程拉起并独占
-> FireTuner 连接）。**civ6-mcp 不是遗留物**：本仓库对它做了大量针对性改造
+> + `civ6-mcp/`（**进程内桥的库本体**：Lua 语料 + 连接管理，由 war-room 直接
+> import 使用，不再作为子进程单独拉起）。**civ6-mcp 不是遗留物**：本仓库
+> 对它做了大量针对性改造
 > （批量 Lua 往返、end_turn 快速路径、政策/外交/议会修复等），两者互相依赖、缺一不可。
 > 桥的原始上游是 [lmwilki/civ6-mcp](https://github.com/lmwilki/civ6-mcp)（v1.1.11），
 > 致谢 👏；本仓库内的版本包含大量本地改动，请勿混用上游版本。
 >
 > ⚠️ **运行前提的硬规则**（踩坑沉淀，详见下文「关键运维规则」）：
-> 读档前 bridge 必须已连上 tuner；同机只跑一个 war-room。
+> 读档前 war-room（进程内桥）必须已连上 tuner；tuner 连接同时只归一个进程持有。
 
 ```text
                  ┌──────────────────────────────────────────────┐
@@ -21,15 +22,16 @@
                  │  · LLM 网关（provider 可配置，密钥仅服务端持有） │
                  │  · SQLite 编年史 + WebUI（自动/手动开关）       │
                  │  · AutoPilot：监控式循环 + 堵塞处理 + 防死循环   │
+                 │  · 进程内桥 InProcessBridge：后台事件循环线程   │
+                 │    直连 FireTuner TCP :4318（复用 civ6-mcp 的  │
+                 │    Lua 语料 + 连接管理；断线自动重连）           │
                  └───────┬──────────────────────────▲───────────┘
-            HTTP 读+写   │                          │ 定向提问 / typed 答案
+          TCP 直连 :4318 │                          │ 定向提问 / typed 答案
                  ┌───────▼──────────────┐   ┌───────┴────────┐
-                 │ civ6-mcp 桥进程 :8000 │   │  LLM 判断层     │
-                 │ (autopilot 的子进程)   │   │ (typesafe/openai│
-                 │ · 独占 FireTuner:4318 │   │  /anthropic/mock)│
-                 │ · PopupWatcher 关弹窗 │   └────────────────┘
-                 │ · 崩溃自动重连        │
-                 └──────────────────────┘
+                 │ 文明6 · FireTuner     │   │  LLM 判断层     │
+                 │ (游戏侧 Lua 调试接口)  │   │ (typesafe/openai│
+                 │                      │   │  /anthropic/mock)│
+                 └──────────────────────┘   └────────────────┘
 ```
 
 **决策自治能力一览**（Auto 模式下全部自动处理，无需人工）：
@@ -64,27 +66,29 @@ uv run python seed.py
 ```
 
 游戏侧前置：文明6 开启 FireTuner（选项 → 游戏选项 → 高级 → 启用 FireTuner，重启游戏）。
-桥进程（`python -m civ_mcp`）由 war-room 自动 spawn，默认使用**与服务器同一个解释器**
-（即 `.venv`——`uv sync` 已把 civ6-mcp 以 editable 方式装好）；万一未装，也会自动把
-`./civ6-mcp/src` 注入 PYTHONPATH 兜底。Python 版本要求 ≥ 3.12。
+桥以进程内模块运行（`server/bridge_inproc.py`）：专用后台事件循环线程直接持有
+FireTuner 连接；`civ6-mcp` 作为库被 war-room 导入（`uv sync` 已把它以 editable
+方式装进 `.venv`）。Python 版本要求 ≥ 3.12。
 
 ### ⚠️ 关键运维规则（2026-10-01 事故沉淀）
 
-1. **加载存档前，bridge 必须已连上 tuner。** Civ6 只在存档加载（Lua 上下文创建）
-   那一刻把 `InGame`/`GameCore_Tuner` 注册给 tuner；如果加载时没有任何客户端连着，
-   这些上下文**永远不会暴露**——游戏画面正常但 bridge 无法操作（握手只见前端状态）。
-   正确顺序：先开 war-room（bridge 连上主菜单状态的游戏）→ 再读档。
+1. **加载存档前，tuner 客户端必须在线（即 war-room 进程必须先启动并连上 tuner）。**
+   Civ6 只在存档加载（Lua 上下文创建）那一刻把 `InGame`/`GameCore_Tuner` 注册给
+   tuner；如果加载时没有任何客户端连着，这些上下文**永远不会暴露**——游戏画面
+   正常但桥无法操作（握手只见前端状态）。
+   正确顺序：先开 war-room（进程内桥连上主菜单状态的游戏）→ 再读档。
    验证/修复工具：`scripts/tuner_keeper.py`（保持一条连接并轮询状态列表，
    出现 InGame+GameCore_Tuner 即退出码 0）。
 2. **tuner 客户端配额会被死连接耗尽。** 游戏侧的 tuner 只放行有限个客户端且
-   不回收半死连接（CLOSE_WAIT 堆积后新连接直接 WinError 1225 拒绝）。反复
-   spawn/杀 bridge 会自我耗尽配额——唯一解法是重启游戏进程。
-3. **同一台机只跑一个 war-room。** 多个 war-room 实例会互相 takeover 对方的
-   bridge（`_takeover_once` 杀"竞争控制器"），表现为 `bridge not ready after 90s`。
-   检查：`netstat -ano | findstr :8081` 是否只有一个 LISTEN，以及是否存在
-   未绑定端口的孤儿 uvicorn 进程。
-4. **游戏意外退出后的恢复顺序**：启动 war-room → AUTO（bridge 连上主菜单）→
-   游戏内手动/自动化读档（读档瞬间 bridge 必须在线）→ 回合恢复推进。
+   不回收半死连接（CLOSE_WAIT 堆积后新连接直接 WinError 1225 拒绝）。
+   旧设计里最大的自伤来源——反复 spawn/杀桥子进程——已随进程内桥消失
+   （只连接一次、断线重连）；配额真被耗尽时，唯一解法是重启游戏进程。
+3. **tuner 连接同时只归一个进程持有。** 进程内桥启动即连接一次、断线后自动
+   重连；仍不要同机跑两个 war-room——两个进程抢同一条 tuner 连接，后连者
+   只能反复重连失败。检查：`netstat -ano | findstr :8080` 只应有一个
+   LISTEN；`findstr :4318` 可确认当前谁持有 tuner 连接。
+4. **游戏意外退出后的恢复顺序**：启动 war-room → AUTO（进程内桥直接连上
+   主菜单状态）→ 游戏内手动/自动化读档（读档瞬间桥必须在线）→ 回合恢复推进。
    本仓恢复实例：杀游戏 → Epic 协议拉起（`com.epicgames.launcher://apps/Kinglet?action=launch&silent=true`）
    → 主菜单 CONTINUE → 选 auto 存档行 → LOAD。
 
@@ -143,11 +147,11 @@ JEVCIV6_TAKEOVER / JEVCIV6_CONFIG`。命令行判官同样支持：
 
 WebUI 顶栏滑动块切换控制权（`GET/POST /api/mode`）：
 
-- **手动（默认）**：桥进程停止，FireTuner 槽位释放，玩家直接操作游戏。
-- **自动**：war-room spawn civ6-mcp 桥子进程（独占 FireTuner），按上述循环推进。
-  - 自动模式启动执行**一次性接管**：终止其他持有 FireTuner 链接的 python 进程
-    （Windows；可用 `takeover_on_start=false` 关闭；绝不触碰游戏本体）。
-  - 桥丢失自动重生；连续 3 次失败自动暂停回手动，原因写入编年史。
+- **手动（默认）**：进程内桥断开 FireTuner 连接，槽位释放，玩家直接操作游戏。
+- **自动**：进程内桥连上并独占 FireTuner（专用事件循环线程持有），按上述循环推进。
+  - 桥不再以子进程存在：spawn / 一次性接管（takeover）整类逻辑随之移除，
+    不再有竞争桥进程、端口冲突或孤儿进程。
+  - 连接断开自动重连；连续 3 次失败自动暂停回手动，原因写入编年史。
   - 等待期间 UI 显示 `AUTO · ending_turn · 等待回合约 Ns`；处理阻塞时显示
     `handling_world_congress` 等步骤名。
 - 设置 `auto_decline_deals=false` 可以改为"遇到交易邀请就暂停"，由玩家手动处理。
@@ -207,7 +211,7 @@ WebUI 顶栏滑动块切换控制权（`GET/POST /api/mode`）：
 | GET | `/api/live` | 游戏在线探测 |
 | GET | `/api/config` | 非敏感配置摘要（引擎、来源、桥地址） |
 
-桥进程（civ6-mcp）侧新增只读端点（autopilot 专用，不对外开放）：
+civ6-mcp（进程内桥）侧新增只读端点（autopilot 专用，不对外开放）：
 `GET /api/turnstate`（1 秒级监控用，GameCore-only）、
 `GET /api/settle_candidates?unit_index=`、`GET /api/district_advisor?city_id=&district_type=`；
 动作白名单扩充了世界议会/交易/外交相关工具。
@@ -224,6 +228,7 @@ jev-civ6/
 │   ├── decision_gate.py# 纯代码决策闸门：何时值得问 LLM（按城生产/定居接线）
 │   ├── autopilot.py    # ★ 监控式自动驾驶：短超时 end_turn + turnstate 轮询
 │   │                   #   + 堵塞分类处理 + 防卡死看门狗 + 定居/威胁执行器
+│   ├── bridge_inproc.py # ★ 进程内桥：专用事件循环线程直连 FireTuner（吸收桥进程）
 │   └── typesafe.py     # TypeSafe 客户端（429/529 退避；Windows 环境变量回退）
 ├── tests/              # ★ 30 项离线单测（闸门/主循环/配置/LLM/执行器）
 ├── scripts/
@@ -231,7 +236,7 @@ jev-civ6/
 ├── web/                # 单页 UI（无构建步骤）
 ├── hooks/              # 可选 ZCode PostToolUse 自动记录器
 ├── artifacts/          # T12 真实判断样本（请求/答案）
-├── civ6-mcp/           # FireTuner 桥（上游 v1.1.11 + 本项目补丁，见其 git diff）
+├── civ6-mcp/           # FireTuner 桥·进程内库（上游 v1.1.11+本项目补丁，见 git diff）
 ├── pyproject.toml      # ★ uv 项目定义（uv sync 一键建环境）
 ├── uv.lock             # ★ 依赖版本锁定
 ├── jevciv6.toml        # ★ 活动配置（provider 一行切换）
@@ -252,8 +257,8 @@ jev-civ6/
   全是零成本确定性代码。
 - **LLM 抽象层**：所有 provider 同一调用形态；答案做规范校验后才入账；
   key 在服务端读取、从不落日志、不经过前端。
-- **桥接而非抢链接**：FireTuner 单客户端槽位只归桥进程，autopilot 管零个 socket；
-  重连/弹窗/持久性继承上游实现。
+- **桥接而非抢链接**：FireTuner 单客户端槽位只归进程内桥（专用线程持有），
+  autopilot 管零个 socket；重连/弹窗/持久性继承上游实现。
 - **SQLite 而非 JSONL**：单文件零依赖，按类型/游标查询是 UI 第一需求。
 - **可回滚**：项目已初始化 git，本次改造前的基线在首个提交中；备份见工作区。
 
@@ -428,4 +433,8 @@ uv run python scripts/dry_run_demo.py    # offline end-to-end pipeline demo
    对方提议互开边境（每文明 20 回合节流，跳过交战国）。
 7. **杂项**：takeover 的 PowerShell 探测超时容忍（高负载下 PS 首启可超 15s）、
    policy_fill 过时标志不再误暂停、错误自动截图（`artifacts/screenshots/`）。
+8. **架构吸收重构（v3.x）**——桥进程吸收进 war-room 进程内（`server/bridge_inproc.py`，
+   专用事件循环线程持有 FireTuner 连接），消灭子进程 spawn/takeover/端口冲突/
+   孤儿进程整类故障；HTTP 一跳延迟移除；civ6-mcp 转为进程内库依赖，
+   Lua 语料原样复用。
 

@@ -36,8 +36,6 @@ import re
 import subprocess
 import sys
 import time
-import urllib.error
-import urllib.request
 from datetime import datetime, timezone
 from typing import Callable
 
@@ -46,7 +44,6 @@ from . import config as cfgmod
 log = logging.getLogger("jevciv6.autopilot")
 
 DEFAULT_FAIL_LIMIT = 3
-BRIDGE_URL = "http://127.0.0.1:8000"   # overridden at runtime via set_bridge_url
 BLOCKER_PER_KIND_CAP = 2               # same blocker handled N times → pause
 BLOCKER_TOTAL_CAP = 6                  # total blocker handling per advance
 
@@ -59,30 +56,12 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def set_bridge_url(url: str) -> None:
-    global BRIDGE_URL
-    BRIDGE_URL = url or BRIDGE_URL
-
-
-def _http(method: str, path: str, body: dict | None = None, timeout: float = 60.0):
-    url = BRIDGE_URL + path
-    data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(
-        url, data=data, method=method,
-        headers={"Content-Type": "application/json"} if data else {},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.load(r)
-    except urllib.error.HTTPError as e:
-        return {"error": f"HTTP {e.code}", "detail": e.read().decode()[:200]}
-    except Exception as e:  # noqa: BLE001
-        return {"error": str(e)}
-
-
-def _quick_state() -> dict | None:
+def _quick_state(bridge: "Bridge") -> dict | None:
     """Cheap GameCore-only probe (safe during AI turn processing)."""
-    r = _http("GET", "/api/turnstate", timeout=5.0)
+    try:
+        r = bridge.turnstate()
+    except Exception:  # noqa: BLE001 — probe must never raise
+        return None
     if isinstance(r, dict) and "error" not in r and "turn" in r:
         return r
     return None
@@ -424,142 +403,31 @@ def _unimproved_tiles(snapshot: dict) -> list:
     return tiles
 
 
-# ────────────────────────────── bridge process ──────────────────────────────
+# ────────────────────────────── in-process bridge ────────────────────────────
+#
+# v3.x refactor: the civ6-mcp bridge is no longer a subprocess spoken to over
+# HTTP — InProcessBridge (server/bridge_inproc.py) holds the FireTuner TCP
+# connection directly in a dedicated event-loop thread and dispatches to the
+# civ_mcp.GameState Lua corpus in-process. The whole class of subprocess
+# spawn/takeover/port-conflict/orphan failures disappears with this.
 
-class Bridge:
-    """Owns the civ6-mcp bridge subprocess and its HTTP surface."""
+from .bridge_inproc import InProcessBridge as _InProcessBridge  # noqa: E402
 
-    def __init__(self, journal, cfg=None):
-        self.journal = journal
-        self.cfg = cfg or cfgmod.load()
-        set_bridge_url(self.cfg.bridge.url)
-        self.proc: subprocess.Popen | None = None
 
-    def alive(self) -> bool:
-        return self.proc is not None and self.proc.poll() is None
+class Bridge(_InProcessBridge):
+    """In-process bridge + legacy act_data error-shape compatibility.
 
-    def healthy(self) -> bool:
-        """True when the bridge answers HTTP (link up, game connected)."""
-        if not self.alive():
-            return False
-        return "error" not in _http("GET", "/api/overview", timeout=8.0)
+    The old HTTP bridge returned a sentinel LIST
+    ([{"unit_index": None, "result": "Error: ..."}]) when a dispatched
+    action failed; batch consumers iterate it. Keep that contract.
+    """
 
-    async def start(self, turn=None) -> None:
-        cfg = self.cfg
-        report = await asyncio.to_thread(_takeover_once, cfg)
-        self.journal.add("action", {
-            "tool": "bridge_takeover", "args": {}, "result": report,
-        }, turn=turn)
-        python = cfg.bridge.python or sys.executable or "python"
-        env = os.environ.copy()
-        src = cfgmod.bridge_src_path(cfg)
-        if src:
-            env["PYTHONPATH"] = str(src) + os.pathsep + env.get("PYTHONPATH", "")
-        # stdin must stay OPEN (PIPE, never written) or the stdio MCP server
-        # sees EOF and exits; stdout/stderr discarded so pipes never fill.
-        self.proc = subprocess.Popen(
-            [python, "-m", cfg.bridge.module],
-            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, env=env, cwd=str(cfgmod.ROOT),
-            creationflags=subprocess.CREATE_NO_WINDOW
-            if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
-        )
-        deadline = asyncio.get_event_loop().time() + cfg.bridge.ready_timeout_s
-        while asyncio.get_event_loop().time() < deadline:
-            if self.proc.poll() is not None:
-                raise RuntimeError(
-                    f"bridge process exited rc={self.proc.returncode} "
-                    "(python/env problem — is civ6-mcp installed or on PYTHONPATH?)")
-            if self.healthy():
-                self.journal.add("action", {
-                    "tool": "bridge_up", "args": {"pid": self.proc.pid},
-                    "result": f"bridge ready at {cfg.bridge.url}",
-                }, turn=turn)
-                return
-            await asyncio.sleep(2)
-        raise RuntimeError(f"bridge not ready after {cfg.bridge.ready_timeout_s}s")
-
-    async def stop(self, turn=None) -> None:
-        if self.proc and self.proc.poll() is None:
-            self.proc.terminate()
-            try:
-                await asyncio.to_thread(self.proc.wait, 8)
-            except subprocess.TimeoutExpired:
-                self.proc.kill()
-            self.journal.add("action", {
-                "tool": "bridge_down", "args": {},
-                "result": "bridge stopped — FireTuner slot released",
-            }, turn=turn)
-        self.proc = None
-
-    # ── typed convenience wrappers ────────────────────────────────
-    def overview(self) -> dict:
-        return _http("GET", "/api/overview")
-
-    def units(self) -> list:
-        return _http("GET", "/api/units")
-
-    def cities(self) -> dict:
-        return _http("GET", "/api/cities")  # [cities, distances]
-
-    def tech(self) -> dict:
-        return _http("GET", "/api/tech")
-
-    def threats(self) -> list:
-        return _http("GET", "/api/threats")
-
-    def diplomacy(self) -> dict:
-        return _http("GET", "/api/diplomacy")
-
-    def turnstate(self) -> dict:
-        return _http("GET", "/api/turnstate")
-
-    def warroom_collect(self, pol: bool = False, cs: bool = False,
-                        gov: bool = False) -> dict:
-        """Whole per-turn collect in ONE batched Lua roundtrip; low-frequency
-        sections (policies/city-states/governors) only when flagged."""
-        q = []
-        if pol:
-            q.append("pol=1")
-        if cs:
-            q.append("cs=1")
-        if gov:
-            q.append("gov=1")
-        suffix = ("?" + "&".join(q)) if q else ""
-        return _http("GET", "/api/warroom_collect" + suffix)
-
-    def map_area(self, x: int, y: int, radius: int = 2) -> list:
-        return _http("GET", f"/api/map?x={x}&y={y}&radius={radius}")
-
-    def settle_candidates(self, unit_index: int) -> list:
-        return _http("GET", f"/api/settle_candidates?unit_index={unit_index}")
-
-    def district_advisor(self, city_id: int, district_type: str) -> list:
-        return _http("GET",
-                     f"/api/district_advisor?city_id={city_id}"
-                     f"&district_type={district_type}")
-
-    def production_options(self, city_id: int) -> list:
-        r = _http("POST", "/api/action", {"tool": "list_city_production",
-                                          "args": {"city_id": city_id}})
-        return r.get("data") or []
-
-    def act(self, tool: str, args: dict, timeout: float = 60.0) -> str:
-        r = _http("POST", "/api/action", {"tool": tool, "args": args},
-                  timeout=timeout)
-        if "error" in r:
-            return f"Error: {r['error']} {r.get('detail', '')}"
-        return str(r.get("result", r.get("data", "")))
-
-    def act_data(self, tool: str, args: dict, timeout: float = 60.0) -> list:
-        """Action endpoint variant that returns structured (list) data."""
-        r = _http("POST", "/api/action", {"tool": tool, "args": args},
-                  timeout=timeout)
-        if "error" in r:
+    def act_data(self, tool: str, args: dict, timeout: float = 60.0):
+        r = super().act_data(tool, args, timeout=timeout)
+        if isinstance(r, dict) and "error" in r:
             return [{"unit_index": None,
-                     "result": f"Error: {r['error']} {r.get('detail', '')}"}]
-        data = r.get("data")
-        return data if isinstance(data, (list, dict)) else []
+                     "result": f"Error: {r['error']}"}]
+        return r
 
 
 # ────────────────────────────── autopilot ───────────────────────────────────
@@ -572,7 +440,6 @@ class AutoPilot:
         self.gate_fn = gate_fn
         self.jev_fn = jev_fn  # sync; run in a thread
         self.cfg = cfg or cfgmod.load()
-        set_bridge_url(self.cfg.bridge.url)
         self._stop_flag = False
         self._decide_lock = asyncio.Lock()
         self._sentinel_hot = 0.0
@@ -709,7 +576,7 @@ class AutoPilot:
         while not self._stop_flag:
             await asyncio.sleep(ap.sentinel_interval_s)
             try:
-                qs = await asyncio.to_thread(_quick_state)
+                qs = await asyncio.to_thread(_quick_state, bridge)
                 if qs:
                     if self._in_turn_advance and self._advance_started:
                         self._set(waiting_s=int(time.monotonic() - self._advance_started))
@@ -733,7 +600,8 @@ class AutoPilot:
                 pass
 
     async def _loop(self) -> None:
-        bridge = Bridge(self.journal, self.cfg)
+        bridge = Bridge(self.journal, self.cfg,
+                        takeover_fn=lambda *_a, **_k: _takeover_once(self.cfg))
         prev_snapshot: dict | None = None
         fails = 0
         limit = self.cfg.autopilot.fail_limit or DEFAULT_FAIL_LIMIT
@@ -1685,7 +1553,7 @@ class AutoPilot:
                 except Exception as e:  # noqa: BLE001
                     return f"Error: {e}"
             await asyncio.sleep(1.0)
-            qs = await asyncio.to_thread(_quick_state)
+            qs = await asyncio.to_thread(_quick_state, bridge)
             if qs and before is not None and int(qs.get("turn", -1)) > int(before):
                 # turn advanced — give the narration a short grace so the
                 # journal keeps its "== Events ==" detail, but never block the
