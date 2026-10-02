@@ -144,6 +144,42 @@ class ControlState:
 
 
 control = ControlState()
+
+# ── black box: periodic thread-stack dumps for hang forensics ──────────────
+import faulthandler as _faulthandler
+import threading as _threading
+import time as _time
+
+_STACK_PATH = Path(__file__).resolve().parent.parent / "artifacts" / "stacks.txt"
+_STACK_PATH.parent.mkdir(exist_ok=True)
+_faulthandler.enable()
+_stack_lock = _threading.Lock()
+
+
+def dump_stacks(tag: str = "manual") -> None:
+    """Append every thread's Python stack to artifacts/stacks.txt."""
+    try:
+        with _stack_lock:
+            with open(_STACK_PATH, "a", encoding="utf-8") as f:
+                f.write("\n===== %s @ %s =====\n"
+                        % (tag, _time.strftime("%H:%M:%S")))
+                _faulthandler.dump_traceback(file=f)
+    except Exception:  # noqa: BLE001 — diagnostics must never break the app
+        pass
+
+
+def _stack_dumper_loop() -> None:
+    n = 0
+    while True:
+        _time.sleep(300)
+        n += 1
+        dump_stacks(f"periodic-{n}")
+
+
+_threading.Thread(target=_stack_dumper_loop, daemon=True,
+                  name="stack-dumper").start()
+
+
 pilot = AutoPilot(journal, gate_evaluate, llm_judge)
 pilot.on_pause = lambda: setattr(control, "mode", "manual")
 

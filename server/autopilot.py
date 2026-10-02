@@ -445,6 +445,7 @@ class AutoPilot:
         self._sentinel_hot = 0.0
         self._in_turn_advance = False
         self._advance_started: float | None = None
+        self._advance_beat: float = time.monotonic()
         self._last_advance = time.monotonic()
         self._settler_plan: dict | None = None
         self._settler_step_turn: int | None = None
@@ -576,6 +577,17 @@ class AutoPilot:
         while not self._stop_flag:
             await asyncio.sleep(ap.sentinel_interval_s)
             try:
+                # advance-loop liveness: the loop iterates every few seconds;
+                # a beat gap >120s means it is hung in one un-timed call —
+                # dump all thread stacks for forensics before it is restarted.
+                if (self._in_turn_advance
+                        and time.monotonic() - self._advance_beat > 120):
+                    try:
+                        from .app import dump_stacks
+                        dump_stacks("advance-loop-stall")
+                    except Exception:  # noqa: BLE001
+                        pass
+                    self._advance_beat = time.monotonic()  # re-arm (1 dump/min)
                 qs = await asyncio.to_thread(_quick_state, bridge)
                 if qs:
                     if self._in_turn_advance and self._advance_started:
@@ -2076,6 +2088,7 @@ class AutoPilot:
         consecutive_timeouts = 0
         try:
             while not self._stop_flag and time.monotonic() < deadline:
+                self._advance_beat = time.monotonic()
                 before = (self.status.get("last_snapshot") or {}).get("turn")
                 result = await self._end_turn_once(bridge, before)
                 if self._stop_flag:
