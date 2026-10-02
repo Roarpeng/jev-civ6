@@ -672,6 +672,20 @@ class AutoPilot:
                 except asyncio.CancelledError:
                     raise
                 except ConnectionError as e:
+                    # Sitting at the main menu (operator hasn't loaded a
+                    # save yet) is a WAIT state, not a failure — the bridge
+                    # link is alive, collect just has no game to read.
+                    if await asyncio.to_thread(
+                            lambda: bridge.alive()
+                            and not bridge.game_loaded()):
+                        self._set(step="waiting_for_game", connected=True)
+                        self.journal.add("action", {
+                            "tool": "menu_wait", "args": {},
+                            "result": "bridge alive at main menu — "
+                                      "waiting for a save to load",
+                        }, turn=self.status.get("turn"))
+                        await asyncio.sleep(3.0)
+                        continue
                     fails += 1
                     self.status["last_error"] = str(e)
                     self.journal.add("action", {
@@ -742,8 +756,9 @@ class AutoPilot:
         t_collect = time.monotonic() - t_collect0
         self._t_collect = t_collect
         self._cycle_col = col
-        self._legs_str = "".join(str(v) for v in
-            (col.get("_leg_timing") or {}).values())
+        _lt = col.get("_leg_timing") or {}
+        self._legs_str = (f"{_lt.get('ingame', 0)}+{_lt.get('gamecore', 0)}"
+                         f" [{_lt.get('sections', '-')}]")
         ov = col.get("overview") or {}
         units = col.get("units") or []
         cities_raw = col.get("cities") or []
@@ -997,10 +1012,18 @@ class AutoPilot:
             }, turn=snapshot["turn"])
             if err:
                 raise RuntimeError(f"LLM judgment failed: {err}")
-            # 4. execute
+            # 4. execute — settle first: writes issued while the engine is
+            # busy take 3-5s instead of 0.3s (same bimodality as collect)
             self._set(step="executing")
             t_exec0 = time.monotonic()
             self._t_judge = (latency_ms or 0) / 1000.0
+            while time.monotonic() - t_exec0 < 2.5:
+                p0 = time.monotonic()
+                await asyncio.to_thread(_quick_state, bridge)
+                if (time.monotonic() - p0) < 0.4:
+                    break
+                await asyncio.sleep(0.3)
+            t_exec0 = time.monotonic()
             await self._execute(bridge, (resp or {}).get("answers") or {},
                                 gate["questions"], snapshot, snapshot["turn"])
             self._t_exec = time.monotonic() - t_exec0

@@ -178,10 +178,10 @@ def _make_real_conn_factory(cfg):
 async def _ensure_states(conn) -> None:
     """Await the connection's game-state discovery. The real GameConnection
     spells it ``_ensure_game_states``; tolerate the public spelling too."""
-    ensure = (getattr(conn, "_ensure_game_states", None)
-              or getattr(conn, "ensure_game_states", None))
-    if ensure is not None:
-        await ensure()
+    # No-op at connect time: at the main menu InGame/GameCore states don't
+    # exist yet and the civ_mcp helper would reconnect-loop until start()
+    # timed out. _ensure() re-discovers after the operator loads a save.
+    return
 
 
 class InProcessBridge:
@@ -483,15 +483,20 @@ class InProcessBridge:
 
         # ONE roundtrip: the GameCore reads (tech/threats) run fine in the
         # InGame context too, so everything merges into a single script.
+        def _sec(name: str, body: str) -> str:
+            return (f'print("SECT|{name}|0"); local _c0=os.clock() '
+                    + body
+                    + f' print("SECT|{name}|" .. math.floor((os.clock()-_c0)*1000)) ')
+
         lua = (
-            'print("SECTION|wr"); '
-            + _strip_trailing_sentinel(lq.build_wr_drain())
-            + ' print("SECTION|overview"); '
-            + _strip_trailing_sentinel(lq.build_overview_query())
-            + ' print("SECTION|units"); '
-            + _strip_trailing_sentinel(lq.build_units_query())
-            + ' print("SECTION|cities"); '
-            + _strip_trailing_sentinel(lq.build_cities_query())
+            _sec("wr", 'print("SECTION|wr"); '
+                 + _strip_trailing_sentinel(lq.build_wr_drain()))
+            + _sec("overview", 'print("SECTION|overview"); '
+                   + _strip_trailing_sentinel(lq.build_overview_query()))
+            + _sec("units", 'print("SECTION|units"); '
+                   + _strip_trailing_sentinel(lq.build_units_query()))
+            + _sec("cities", 'print("SECTION|cities"); '
+                   + _strip_trailing_sentinel(lq.build_cities_query()))
         )
         # NOTE: tech/threats must run in the GameCore context — some of
         # their APIs are nil in InGame (empirically: LuaError at merge)
@@ -529,8 +534,18 @@ class InProcessBridge:
         _t1 = _t.monotonic()
         r_lines = await conn.execute_read(gc_lua)
         _t2 = _t.monotonic()
+        _sects = {}
+        for ln in w_lines:
+            if ln.startswith("SECT|"):
+                _, nm, ms = ln.split("|", 2)
+                if ms.isdigit() and int(ms) > 0:
+                    _sects.setdefault(nm, []).append(int(ms))
+        _sec_summary = ",".join(
+            f"{nm}:{max(v)}" for nm, v in
+            sorted(_sects.items(), key=lambda kv: -max(kv[1]))[:4] if v)
         _leg_timing = {"ingame": round(_t1 - _t0, 2),
-                       "gamecore": round(_t2 - _t1, 2)}
+                       "gamecore": round(_t2 - _t1, 2),
+                       "sections": _sec_summary or "-"}
         w_sections = _split_sections(w_lines)
         r_sections = _split_sections(r_lines)
 

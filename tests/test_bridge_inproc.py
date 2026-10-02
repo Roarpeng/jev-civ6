@@ -172,7 +172,9 @@ class LifecycleTests(unittest.TestCase):
             # fake conn reports connected + an InGame state index
             self.assertTrue(bridge.healthy())
             self.assertEqual(holder["conn"].connect_calls, 1)
-            self.assertGreaterEqual(holder["conn"].ensure_calls, 1)
+            # start() no longer awaits state discovery (main-menu
+            # connections must succeed); _ensure() re-discovers later
+            self.assertEqual(holder["conn"].ensure_calls, 0)
             # indexes gone (e.g. back at main menu) → not healthy
             holder["conn"].ingame_index = None
             holder["conn"].gamecore_index = None

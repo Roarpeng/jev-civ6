@@ -52,9 +52,20 @@ class GameConnection:
                 f"Cannot connect to Civ 6 at {self.host}:{self.port}. "
                 "Is the game running with EnableTuner=1?"
             ) from e
-        app_identity, raw_states = await tuner_client.handshake(
-            self._reader, self._writer
-        )
+        try:
+            app_identity, raw_states = await tuner_client.handshake(
+                self._reader, self._writer
+            )
+        except Exception:
+            # A handshake that times out mid-load used to leak the TCP
+            # writer: each retry then piled a half-open socket onto the
+            # game's tuner until it stopped accepting ANY client.
+            try:
+                self._writer.close()
+            except Exception:  # noqa: BLE001 — cleanup must not mask the cause
+                pass
+            self._reader, self._writer = None, None
+            raise
         log.info("Connected: %s", app_identity)
 
         # Parse state list: alternating [index_number, state_name] pairs
