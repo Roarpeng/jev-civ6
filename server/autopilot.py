@@ -453,6 +453,7 @@ class AutoPilot:
         self._borders_step_turn: int | None = None
         self._borders_blocked: dict[str, int] = {}
         self._borders_tried: dict[str, int] = {}
+        self._promo_step_turn: int | None = None
         self._strategy: dict | None = None   # {"path": "science", "since_turn": N}
         self._religion_founding_started = False
         self._last_policy_review: int | None = None
@@ -880,6 +881,11 @@ class AutoPilot:
 
         # pantheon the moment faith allows (forced modal unblock)
         await self._ensure_pantheon(bridge, snapshot["turn"])
+
+        # idle traders must be routed (TradeRouteChooser blocks the
+        # turn) + keep unit promotions flowing (apostle modal)
+        await self._ensure_trade_routes(bridge, snapshot["turn"])
+        await self._ensure_promotions(bridge, snapshot, snapshot["turn"])
 
         # religion spread engine: buy missionaries/apostles with faith,
         # spread when in position, walk toward known foreign cities
@@ -1400,6 +1406,104 @@ class AutoPilot:
         self._religion_founding_started = True
         await asyncio.sleep(1.5)
         await self._found_religion(bridge, turn)
+
+    async def _ensure_trade_routes(self, bridge: Bridge, turn: int) -> None:
+        """Idle traders must be routed — the TradeRouteChooser modal blocks
+        the turn the moment a trader is created or finishes a route.
+
+        Deterministic heuristic (traders are low-stakes, high-frequency —
+        a Jev round-trip per route would cost more than it earns):
+        city-state quest > international > domestic, plus raw yields.
+        """
+        try:
+            st = await asyncio.to_thread(bridge.act_data,
+                                         "get_trade_routes", {})
+        except Exception:  # noqa: BLE001
+            return
+        if not isinstance(st, dict):
+            return
+        for t in (st.get("traders") or []):
+            if not isinstance(t, dict) or t.get("on_route"):
+                continue
+            uid = t.get("unit_id")
+            if uid is None:
+                continue
+            ui = int(uid) % 65536
+            try:
+                dests = await asyncio.to_thread(
+                    bridge.act_data, "get_trade_destinations",
+                    {"unit_index": ui})
+            except Exception:  # noqa: BLE001
+                continue
+            if not isinstance(dests, list) or not dests:
+                continue
+
+            def score(d: dict) -> float:
+                s_ = 0.0
+                if d.get("has_quest"):
+                    s_ += 10.0
+                if not d.get("is_domestic"):
+                    s_ += 3.0
+                nums = [float(n) for n in re.findall(
+                    r":([0-9.]+)",
+                    str(d.get("origin_yields")) + str(d.get("dest_yields")))]
+                return s_ + sum(nums)
+
+            best = max((d for d in dests if isinstance(d, dict)),
+                       key=score, default=None)
+            if best is None:
+                continue
+            r = await self._act(bridge, "make_trade_route", {
+                "unit_index": ui,
+                "target_x": int(best.get("x")),
+                "target_y": int(best.get("y"))}, turn)
+            if "Error" not in r:
+                self.journal.add("action", {
+                    "tool": "trade_route", "args": {
+                        "unit_index": ui,
+                        "to": f"{best.get('city_name')} "
+                              f"({best.get('owner_name')})"},
+                    "result": r[:120]}, turn=turn)
+
+    async def _ensure_promotions(self, bridge: Bridge, snapshot: dict,
+                                 turn: int) -> None:
+        """Promote units with available promotions (throttled every 5 turns,
+        ≤12 unit queries per pass).
+
+        Covers the apostle promotion modal (forced on purchase — blocks the
+        turn) and keeps military units leveled. Deterministic first option;
+        revisit with Jev if options start mattering tactically.
+        """
+        if self._promo_step_turn == turn:
+            return
+        self._promo_step_turn = turn
+        checked = 0
+        for u in (snapshot.get("units") or []):
+            if checked >= 12:
+                break
+            uid = u.get("unit_id", u.get("unit_index"))
+            if uid is None:
+                continue
+            checked += 1
+            try:
+                st = await asyncio.to_thread(
+                    bridge.act_data, "get_unit_promotions",
+                    {"unit_id": int(uid)})
+            except Exception:  # noqa: BLE001
+                continue
+            if not isinstance(st, dict):
+                continue
+            promos = st.get("promotions") or []
+            if not promos:
+                continue
+            pick = next((p_ for p_ in promos
+                         if isinstance(p_, dict) and p_.get("promotion_type")),
+                        None)
+            if pick is None:
+                continue
+            await self._act(bridge, "promote_unit", {
+                "unit_id": int(uid),
+                "promotion_type": str(pick["promotion_type"])}, turn)
 
     async def _ensure_pantheon(self, bridge: Bridge, turn: int) -> None:
         """Choose a pantheon the moment faith allows it.
