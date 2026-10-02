@@ -82,6 +82,29 @@
       </div>
     </div>
 
+    <div class="panel" id="panel-llm">
+      <h3 class="panel-title">◈ 军师引擎 · HOT-SWAP</h3>
+      <div class="llm-config">
+        <label>Provider
+          <select id="llm-provider">
+            <option value="typesafe">TypeSafe (Jev)</option>
+            <option value="openai">OpenAI 兼容 (云端/本地)</option>
+            <option value="anthropic">Anthropic</option>
+            <option value="mock">Mock (离线)</option>
+          </select>
+        </label>
+        <label>Model <input id="llm-model" placeholder="jev-latest / gpt-4o / qwen2.5:14b …"></label>
+        <label>Base URL <input id="llm-baseurl" placeholder="http://host.docker.internal:11434/v1 (本地)"></label>
+        <label>API Key <input id="llm-apikey" type="password" placeholder="留空=不修改"></label>
+        <label>Key 环境变量名 <input id="llm-apikeyenv" placeholder="TYPESAFE_API_KEY"></label>
+        <div class="llm-actions">
+          <button id="llm-save">热替换</button>
+          <button id="llm-test">测试连通</button>
+        </div>
+        <div class="llm-status muted" id="llm-status">未加载</div>
+      </div>
+    </div>
+
     <div class="panel panel-dim">
       <h3 class="panel-title">◈ 喂养指南 · FEED</h3>
       <pre class="feed">curl -X POST localhost:8080/api/gate \

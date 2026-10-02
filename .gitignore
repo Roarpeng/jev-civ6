@@ -22,3 +22,4 @@ artifacts/
 Thumbs.db
 .DS_Store
 graphflow-out/
+.env

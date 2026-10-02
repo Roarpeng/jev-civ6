@@ -455,3 +455,58 @@ refresh();
 refreshLive();
 setInterval(refresh, 4000);
 setInterval(refreshLive, 12000);
+
+// ── LLM hot-swap panel ─────────────────────────────────────────
+async function loadLlmConfig() {
+  const st = document.getElementById("llm-status");
+  try {
+    const r = await (await fetch("/api/config")).json();
+    document.getElementById("llm-provider").value = r.llm.provider || "typesafe";
+    document.getElementById("llm-model").value = r.llm.model || "";
+    document.getElementById("llm-baseurl").value = r.llm.base_url || "";
+    document.getElementById("llm-apikeyenv").value = r.llm.api_key_env || "";
+    st.textContent = "当前引擎: " + (r.engine || r.llm.provider) +
+      (r.llm.api_key_set ? " · key已配" : "");
+  } catch (e) {
+    st.textContent = "加载失败: " + e;
+  }
+}
+
+document.getElementById("llm-save").addEventListener("click", async () => {
+  const st = document.getElementById("llm-status");
+  st.textContent = "替换中……";
+  const body = {
+    provider: document.getElementById("llm-provider").value,
+    model: document.getElementById("llm-model").value.trim(),
+    base_url: document.getElementById("llm-baseurl").value.trim(),
+    api_key_env: document.getElementById("llm-apikeyenv").value.trim(),
+  };
+  const key = document.getElementById("llm-apikey").value;
+  if (key) body.api_key = key;          // 留空 = 不修改已存 key
+  try {
+    const r = await (await fetch("/api/config", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    })).json();
+    st.textContent = r.ok ? ("已热替换 → " + r.engine + "（下一次判断生效）")
+                          : ("失败: " + (r.detail || JSON.stringify(r)));
+    document.getElementById("llm-apikey").value = "";
+  } catch (e) {
+    st.textContent = "失败: " + e;
+  }
+});
+
+document.getElementById("llm-test").addEventListener("click", async () => {
+  const st = document.getElementById("llm-status");
+  st.textContent = "测试中……";
+  try {
+    const r = await (await fetch("/api/config/test", {method: "POST"})).json();
+    st.textContent = r.ok ? ("✓ 连通 " + r.engine + " · " + r.latency_ms + "ms")
+                          : ("✗ " + (r.error || "不通"));
+  } catch (e) {
+    st.textContent = "✗ " + e;
+  }
+});
+
+loadLlmConfig();

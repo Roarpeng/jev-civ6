@@ -216,7 +216,113 @@ def config_info():
     """Non-secret config summary for the UI / debugging."""
     cfg = load_config()
     return {"source": cfg.source, "engine": cfg.engine_summary(),
-            "provider": cfg.llm.provider, "bridge_url": cfg.bridge.url}
+            "provider": cfg.llm.provider, "bridge_url": cfg.bridge.url,
+            "llm": {
+                "provider": cfg.llm.provider,
+                "model": cfg.llm.model,
+                "base_url": cfg.llm.base_url,
+                "api_key_env": cfg.llm.api_key_env,
+                "api_key_set": bool(cfg.llm.api_key or
+                                    (cfg.llm.api_key_env and
+                                     os.environ.get(cfg.llm.api_key_env))),
+                "timeout_s": cfg.llm.timeout_s,
+            },
+            "bridge": {"game_host": cfg.bridge.game_host,
+                       "game_port": cfg.bridge.game_port}}
+
+
+class ConfigUpdate(BaseModel):
+    provider: str | None = None     # typesafe | openai | anthropic | mock
+    model: str | None = None
+    base_url: str | None = None
+    api_key: str | None = None      # inline; stored toml-side, shown never
+    api_key_env: str | None = None
+    timeout_s: float | None = None
+
+
+def _write_llm_toml(cfg, upd: ConfigUpdate) -> Path:
+    """Persist the [llm] section of jevciv6.toml, keeping other sections.
+
+    The judge re-reads config on every call, so the file write IS the
+    hot-swap: the next judgment uses the new backend, no restart needed.
+    """
+    path = Path(cfg.source) if cfg.source else Path("jevciv6.toml")
+    if path.name != "jevciv6.toml":  # custom config path — respect it
+        path = Path(os.environ.get("JEVCIV6_CONFIG", "jevciv6.toml"))
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    keep: list[str] = []
+    in_llm = False
+    for ln in lines:
+        if ln.strip().startswith("["):
+            in_llm = ln.strip() == "[llm]"
+        if not in_llm:
+            keep.append(ln)
+    fields = {
+        "provider": upd.provider if upd.provider is not None else cfg.llm.provider,
+        "model": upd.model if upd.model is not None else cfg.llm.model,
+        "base_url": upd.base_url if upd.base_url is not None else cfg.llm.base_url,
+        "api_key": upd.api_key if upd.api_key is not None else cfg.llm.api_key,
+        "api_key_env": upd.api_key_env if upd.api_key_env is not None
+                       else cfg.llm.api_key_env,
+        "timeout_s": upd.timeout_s if upd.timeout_s is not None
+                     else cfg.llm.timeout_s,
+    }
+    block = ["[llm]"]
+    for k, v in fields.items():
+        if v in ("", None):
+            continue
+        if isinstance(v, float):
+            block.append(f"{k} = {v}")
+        else:
+            block.append(f'{k} = "{v}"')
+    text = "\n".join(x for x in keep if x.strip()) + "\n\n" + "\n".join(block) + "\n"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+@app.post("/api/config")
+def config_update(upd: ConfigUpdate):
+    """Hot-swap the judge backend. Persists to jevciv6.toml; the next
+    judgment call picks it up (config is re-read per call)."""
+    cfg = load_config()
+    if upd.provider and upd.provider not in ("typesafe", "openai",
+                                             "anthropic", "mock"):
+        raise HTTPException(400, f"unknown provider: {upd.provider}")
+    if upd.provider and upd.provider != cfg.llm.provider and upd.model is None:
+        upd.model = ""   # provider switch without an explicit model → reset
+    path = _write_llm_toml(cfg, upd)
+    new = load_config()
+    journal.add("action", {
+        "tool": "config_update",
+        "args": {k: v for k, v in upd.model_dump().items() if v is not None
+                 and k != "api_key"},
+        "result": f"judge backend hot-swapped -> {new.engine_summary()}",
+    })
+    return {"ok": True, "source": str(path),
+            "engine": new.engine_summary(),
+            "llm": {"provider": new.llm.provider, "model": new.llm.model,
+                    "base_url": new.llm.base_url,
+                    "api_key_env": new.llm.api_key_env,
+                    "api_key_set": bool(new.llm.api_key or
+                                        (new.llm.api_key_env and
+                                         os.environ.get(new.llm.api_key_env)))}}
+
+
+@app.post("/api/config/test")
+def config_test():
+    """One tiny judge round-trip to verify the configured backend works."""
+    cfg = load_config()
+    try:
+        resp, latency_ms = llm_judge(
+            {"ping": True},
+            {"ping": {"type": "choice", "instructions": "Reply with ok.",
+                      "criteria": {"ok": "confirm", "no": "deny"}}},
+        )
+        answers = (resp or {}).get("answers", {}) if isinstance(resp, dict) else resp
+        return {"ok": True, "engine": cfg.engine_summary(),
+                "latency_ms": latency_ms, "sample": answers}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "engine": cfg.engine_summary(), "error": str(e)[:300]}
 
 
 @app.get("/api/live")

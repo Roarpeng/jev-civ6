@@ -162,7 +162,8 @@ def _default_gs_factory(conn):
 def _make_real_conn_factory(cfg):
     def _factory():
         from civ_mcp.connection import GameConnection
-        return GameConnection(port=int(cfg.bridge.game_port))
+        return GameConnection(host=cfg.bridge.game_host,
+                              port=int(cfg.bridge.game_port))
     return _factory
 
 

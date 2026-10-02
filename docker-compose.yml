@@ -1,0 +1,21 @@
+services:
+  war-room:
+    build: .
+    image: jev-civ6-war-room
+    container_name: jev-war-room
+    ports:
+      - "8081:8081"
+    environment:
+      # Civ6 runs on the Windows host; its FireTuner binds 127.0.0.1:4318
+      # only, so the host runs scripts/host_forwarder.py exposing it on
+      # 0.0.0.0:14318 (no admin rights needed). Containers reach the host
+      # via host.docker.internal (built into Docker Desktop).
+      JEVCIV6_GAME_HOST: host.docker.internal
+      JEVCIV6_GAME_PORT: "14318"
+      # API keys come from .env (gitignored) — never baked into the image.
+      TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
+    volumes:
+      # Whole-repo mount = hot code reload + journal/state/config persist
+      # on the host. Dependencies stay in the image's /opt/venv.
+      - .:/app
+    restart: unless-stopped

@@ -2,7 +2,5 @@
 # Full reference with all options & provider examples: jevciv6.example.toml
 
 [llm]
-provider = "typesafe"   # switch to "openai" | "anthropic" | "mock" in one line
-# model = "jev-latest"
-# base_url = "https://api.openai.com/v1"
-# api_key_env = "OPENAI_API_KEY"
+provider = "typesafe"
+timeout_s = 60.0

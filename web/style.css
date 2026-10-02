@@ -312,3 +312,18 @@ details.raw pre {
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-thumb { background: rgba(122,139,180,0.25); border-radius: 99px; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* ── LLM hot-swap panel ─────────────────────────────────────── */
+.llm-config { display: flex; flex-direction: column; gap: 8px; }
+.llm-config label { display: flex; flex-direction: column; gap: 3px;
+  font-size: 11px; color: var(--muted, #8a8f98); letter-spacing: .04em; }
+.llm-config input, .llm-config select {
+  background: rgba(0,0,0,.35); border: 1px solid rgba(255,255,255,.14);
+  color: inherit; border-radius: 6px; padding: 6px 8px; font-size: 12px; }
+.llm-actions { display: flex; gap: 8px; margin-top: 2px; }
+.llm-actions button { flex: 1; cursor: pointer; padding: 7px 0;
+  background: rgba(212,175,55,.18); color: inherit; font-weight: 600;
+  border: 1px solid rgba(212,175,55,.5); border-radius: 6px; }
+.llm-actions #llm-test { background: rgba(255,255,255,.06);
+  border-color: rgba(255,255,255,.2); font-weight: 400; }
+.llm-status { font-size: 11px; min-height: 14px; }

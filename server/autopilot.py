@@ -1923,7 +1923,12 @@ class AutoPilot:
                     "criteria": opts,
                 }
             if not questions:
-                return "unhandleable"
+                # Empty slots with ZERO unlocked policies is the normal
+                # opening state (before the first civic completes) — the
+                # game happily ends turns with empty slots then. Report
+                # handled: the end_turn retry advances; if the game truly
+                # blocks, the blocker cap pauses us later.
+                return "handled"
             assignments = dict(fallback)
             ans = await self._ask_judge_inline(questions, turn,
                                                situation="Policy slots must "

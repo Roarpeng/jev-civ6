@@ -44,6 +44,7 @@ class BridgeConfig:
     python: str = ""             # interpreter for the bridge; "" = same as the server
     module: str = "civ_mcp"
     url: str = "http://127.0.0.1:8000"
+    game_host: str = "127.0.0.1"   # FireTuner host; containers use host.docker.internal
     game_port: int = 4318
     ready_timeout_s: float = 90.0
     src_path: str = ""           # PYTHONPATH entry; "" -> ./civ6-mcp/src when it exists
@@ -148,6 +149,10 @@ def _apply_env(cfg: Config) -> Config:
         cfg.llm.api_key = env["JEVCIV6_LLM_API_KEY"]
     if env.get("JEVCIV6_BRIDGE_URL"):
         cfg.bridge.url = env["JEVCIV6_BRIDGE_URL"]
+    if env.get("JEVCIV6_GAME_HOST"):
+        cfg.bridge.game_host = env["JEVCIV6_GAME_HOST"]
+    if env.get("JEVCIV6_GAME_PORT"):
+        cfg.bridge.game_port = int(env["JEVCIV6_GAME_PORT"])
     if env.get("JEVCIV6_PYTHON"):
         cfg.bridge.python = env["JEVCIV6_PYTHON"]
     if env.get("JEVCIV6_TAKEOVER") is not None:

@@ -75,8 +75,18 @@ end)
 local pfEmptySlots = 0
 pcall(function()
   local pCulture = Players[me]:GetCulture()
-  for s = 0, pCulture:GetNumPolicySlots() - 1 do
-    if pCulture:GetSlotPolicy(s) < 0 then pfEmptySlots = pfEmptySlots + 1 end
+  -- Empty slots only block the turn when at least one policy is UNLOCKED
+  -- to fill them with. The opening game (before the first civic completes)
+  -- has empty slots and zero unlocked policies — the game happily ends
+  -- turns in that state, so the gate must not fire.
+  local unlocked = 0
+  for policy in GameInfo.Policies() do
+    if pCulture:IsPolicyUnlocked(policy.Index) then unlocked = unlocked + 1 end
+  end
+  if unlocked > 0 then
+    for s = 0, pCulture:GetNumPolicySlots() - 1 do
+      if pCulture:GetSlotPolicy(s) < 0 then pfEmptySlots = pfEmptySlots + 1 end
+    end
   end
 end)
 local govTitles = 0
