@@ -3,15 +3,15 @@ services:
     build: .
     image: jev-civ6-war-room
     container_name: jev-war-room
-    ports:
-      - "8081:8081"
+    # Host networking (Docker Desktop setting "Enable host networking" —
+    # already flipped in %APPDATA%\Docker\settings-store.json) lets the
+    # in-process bridge reach Civ6's FireTuner on the Windows host's
+    # 127.0.0.1:4318 DIRECTLY — no forwarder, no port mapping; the web UI
+    # is simply at http://localhost:8081.
+    network_mode: host
     environment:
-      # Civ6 runs on the Windows host; its FireTuner binds 127.0.0.1:4318
-      # only, so the host runs scripts/host_forwarder.py exposing it on
-      # 0.0.0.0:14318 (no admin rights needed). Containers reach the host
-      # via host.docker.internal (built into Docker Desktop).
-      JEVCIV6_GAME_HOST: host.docker.internal
-      JEVCIV6_GAME_PORT: "14318"
+      JEVCIV6_GAME_HOST: 127.0.0.1
+      JEVCIV6_GAME_PORT: "4318"
       # API keys come from .env (gitignored) — never baked into the image.
       TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
     volumes:

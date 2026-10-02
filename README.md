@@ -41,7 +41,32 @@
 外交问答、时代献礼选择、使节派遣、忠诚度/住房/舒适度预警、
 跨边境传教的开放边境提议、以及各种回合阻塞的自动解锁。
 
-## 快速开始（uv 环境，独立运行，不依赖 ZCode）
+## 快速开始
+
+### 方式 A · Docker（推荐，一条命令）
+
+```bash
+# 一次性前置（本机已完成）：
+#   1. Docker Desktop 已启用 "Enable host networking"
+#      （%APPDATA%\Docker\settings-store.json → "HostNetworkingEnabled": true，
+#        修改后重启 Docker Desktop）——容器即可直连 Windows 宿主的 127.0.0.1:4318
+#   2. 根目录 .env 写入 TYPESAFE_API_KEY=...（已 gitignore；也可事后在 WebUI 面板配）
+#   3. 游戏侧已开启 FireTuner（选项 → 游戏选项 → 高级 → 启用，重启游戏生效）
+
+docker compose up -d          # 唯一需要的命令
+# → 打开 http://localhost:8081 → 点 AUTO
+# 读档规则：先 AUTO（桥连上主菜单/结束画面）→ 再读档/新局
+# 热插拔：WebUI「军师引擎」面板随时换模型（本地 Ollama 填
+#         http://host.docker.internal:11434/v1）；
+#         宿主改 server/ 或 civ6-mcp/src 代码 → 容器内自动热重载
+```
+
+镜像内依赖装在 `/opt/venv`（避开挂载遮蔽）；整仓挂载 `/app`——代码热重载、
+journal/state/config 全留在宿主。`--reload` 只监听源码目录，db 写入不误触重启。
+（未启用 host networking 的环境：宿主跑 `python scripts/host_forwarder.py`，
+compose 里改回 `JEVCIV6_GAME_PORT: "14318"` 并去掉 `network_mode: host`。）
+
+### 方式 B · 本机 uv 环境（不依赖 Docker）
 
 ```bash
 # 1) 环境：uv 一键创建 .venv 并装齐服务端 + 桥的全部依赖（含 civ6-mcp editable）
