@@ -454,6 +454,7 @@ class AutoPilot:
         self._borders_blocked: dict[str, int] = {}
         self._borders_tried: dict[str, int] = {}
         self._promo_step_turn: int | None = None
+        self._district_dead: dict[tuple, int] = {}
         self._strategy: dict | None = None   # {"path": "science", "since_turn": N}
         self._religion_founding_started = False
         self._last_policy_review: int | None = None
@@ -1000,15 +1001,56 @@ class AutoPilot:
                     args = {"city_id": city_id, "item_type": cat,
                             "item_name": choice, "target_x": None, "target_y": None}
                     if cat == "DISTRICT":  # districts need a placement tile
-                        try:
-                            placements = await asyncio.to_thread(
-                                bridge.district_advisor, city_id, choice)
-                            if isinstance(placements, list) and placements:
-                                p = placements[0]
-                                args["target_x"] = p.get("x")
-                                args["target_y"] = p.get("y")
-                        except Exception:  # noqa: BLE001
-                            pass
+                        # 10-turn memory: this city has no legal plot for this
+                        # district — don't re-try (and re-fail) every turn.
+                        dead = self._district_dead.get((city_id, choice), -99)
+                        why = ""
+                        if turn - dead < 10:
+                            why = "no placement (remembered)"
+                        else:
+                            try:
+                                placements = await asyncio.to_thread(
+                                    bridge.district_advisor, city_id, choice)
+                                if isinstance(placements, list) and placements:
+                                    p = placements[0]
+                                    args["target_x"] = p.get("x")
+                                    args["target_y"] = p.get("y")
+                                else:
+                                    why = (placements
+                                           if isinstance(placements, str)
+                                           else "advisor returned no tiles")
+                            except Exception as e:  # noqa: BLE001
+                                why = f"advisor error: {e}"
+                        if args["target_x"] is None:
+                            self._district_dead[(city_id, choice)] = turn
+                            # Fallback: order a non-district option instead of
+                            # leaving the city idle — first UNIT_/BUILDING_/
+                            # PROJECT_ entry from this question's criteria.
+                            fallback = next(
+                                (c for c in (questions.get(qid) or {})
+                                 .get("criteria", {}) if isinstance(c, str)
+                                 and not c.startswith("DISTRICT_")), None)
+                            self.journal.add("action", {
+                                "tool": "verdict:production_pick",
+                                "args": {"choice": choice, "city_id": city_id},
+                                "result": f"district placement unavailable — "
+                                          f"{str(why)[:110]}; falling back to "
+                                          f"{fallback or 'nothing offered'}"},
+                                turn=turn)
+                            if fallback:
+                                fcat = next((p_ for p_ in
+                                             ("UNIT", "BUILDING", "PROJECT")
+                                             if fallback.startswith(p_ + "_")),
+                                            None)
+                                if fcat:
+                                    await self._act(bridge,
+                                                    "set_city_production", {
+                                        "city_id": city_id,
+                                        "item_type": fcat,
+                                        "item_name": fallback,
+                                        "target_x": None, "target_y": None},
+                                        turn)
+                            continue
                     await self._act(bridge, "set_city_production", args, turn)
                 else:
                     self.journal.add("action", {

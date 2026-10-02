@@ -1846,6 +1846,11 @@ class GameState:
         """
         from civ_mcp.end_turn import execute_end_turn, execute_end_turn_fast
 
+        # advisor budget is PER TURN by contract; it previously reset only on
+        # game-identity change, so after 20 total calls every district/settle
+        # advisor hard-errored forever (districts then failed with
+        # MISSING_COORDS in the executor).
+        self._advisor_calls_this_turn = 0
         if fast:
             return await execute_end_turn_fast(self)
         return await execute_end_turn(self)
