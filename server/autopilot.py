@@ -2384,6 +2384,28 @@ class AutoPilot:
                 if kind in ("timeout", "error"):
                     if kind == "error" and not await asyncio.to_thread(bridge.healthy):
                         raise ConnectionError(f"end_turn transport failed: {text[:150]}")
+                    # Early diplomacy/deal probe after the FIRST timeout: an AI
+                    # proposal popping up mid-processing stalls end_turn for the
+                    # full HTTP timeout before the fast path narrates it —
+                    # probing the sessions directly right away cuts ~30-60s of
+                    # perceived stall per popup.
+                    if consecutive_timeouts == 1:
+                        try:
+                            sess = await asyncio.to_thread(
+                                bridge.act_data, "get_diplomacy_sessions", {})
+                        except Exception:  # noqa: BLE001
+                            sess = None
+                        if isinstance(sess, list) and sess:
+                            total_handled += 1
+                            self._set(step="handling_diplomacy")
+                            st_ = await self._handle_blocker(
+                                bridge, "diplomacy", text, before)
+                            if st_ != "handled":
+                                self._pause("diplomacy session not resolvable")
+                                return
+                            self._set(step="ending_turn")
+                            await asyncio.sleep(1.0)
+                            continue
                     # Repeated HTTP timeouts with no turn advance usually mean
                     # the bridge's end_turn is stuck in its long internal wait
                     # (e.g. units still have moves → game refuses to advance)
