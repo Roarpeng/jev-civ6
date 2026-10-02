@@ -4,9 +4,13 @@
 LLM（Jev 或任意云端/本地模型）只负责语义判断——研究什么、造什么、打不打、
 信不信。每一次判断、每一次操作、每一份国势快照都被记录成可回溯的战争编年史。
 
-![完整会话：游戏 + 战厅实时驾驶](docs/images/shot_session_full.jpg)
+**战厅 WebUI**（编年史 · 国势 · 军师热插拔 · 心跳判活）：
 
 ![战争议事厅 WebUI](docs/images/shot_dashboard.jpg)
+
+**游戏侧**（AI 正在驾驶的文明6 本体）：
+
+![AI 驾驶中的文明6](docs/images/shot_game.jpg)
 
 ---
 
