@@ -106,6 +106,9 @@ ACTION_TOOLS = {
     "spread_religion": ("unit_index",),
     "religious_units_batch": ("actions",),
     "orders_batch": ("orders",),
+    "list_saves": (),
+    "load_game_save": ("save_name",),
+    "load_save_menu": ("save_name",),
     "get_religion_founding_status": (),
     "found_religion": ("religion_type", "follower_belief", "founder_belief"),
     "choose_pantheon": ("belief_type",),
@@ -330,6 +333,44 @@ class InProcessBridge:
 
     def alive(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
+
+    def menu_ping(self) -> bool:
+        """Menu-safe liveness+rediscovery check. Executes a trivial print in
+        the frontend Main State (index 0) directly — never routes through
+        _ensure(), whose game-state rediscovery would reconnect-loop and
+        hammer the tuner while we sit at the main menu. Returns True when
+        game states have appeared (a save finished loading)."""
+        if not self.alive():
+            return False
+        try:
+            fut = asyncio.run_coroutine_threadsafe(
+                self._menu_ping(), self._loop)
+            return bool(fut.result(HEALTH_TIMEOUT_S))
+        except Exception:  # noqa: BLE001
+            return False
+
+    async def _menu_ping(self) -> bool:
+        conn = self._conn
+        if conn is None:
+            return False
+        if not conn.is_connected:
+            try:
+                await conn.connect()
+            except Exception:  # noqa: BLE001
+                return False
+        try:
+            await conn.execute_in_state(0, 'print("PING")', timeout=5.0)
+        except Exception:  # noqa: BLE001
+            return False
+        return self.game_loaded()
+
+    def game_loaded(self) -> bool:
+        """True once InGame/GameCore states were discovered (a save is
+        loaded). False while sitting at the main menu."""
+        conn = self._conn
+        return bool(conn is not None and (
+            getattr(conn, "ingame_index", None) is not None
+            or getattr(conn, "gamecore_index", None) is not None))
 
     def healthy(self) -> bool:
         """True when the link is up and a game context was discovered."""

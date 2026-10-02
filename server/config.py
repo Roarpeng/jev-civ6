@@ -65,7 +65,8 @@ class AutopilotConfig:
     turn_wait_timeout_s: float = 900.0    # max seconds to wait for one turn to advance
     stall_limit_s: float = 1800.0          # no-progress watchdog per turn
     auto_decline_deals: bool = True       # decline incoming trade deals to unblock
-    timeout_blocker_after: int = 4        # N consecutive end_turn no-advance returns
+    timeout_blocker_after: int = 4
+    autosave_load: str = ""   # e.g. 'AutoSave_0229' — loaded automatically when AUTO starts at the main menu; empty = wait for the operator        # N consecutive end_turn no-advance returns
                                            # (each ≈ fast poll cap) before proactively
                                            # dismissing popup + skipping unit moves;
                                            # ~86s at the 20s fast cap, past the point
@@ -129,6 +130,8 @@ def _apply_toml(cfg: Config, data: dict) -> None:
             setattr(cfg.autopilot, key, bool(ap[key]))
     if "timeout_blocker_after" in ap:
         cfg.autopilot.timeout_blocker_after = int(ap["timeout_blocker_after"])
+    if "autosave_load" in ap:
+        cfg.autopilot.autosave_load = str(ap["autosave_load"])
 
     sv = data.get("server") or {}
     if "host" in sv and sv["host"]:

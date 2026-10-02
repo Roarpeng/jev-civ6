@@ -482,6 +482,13 @@ class AutoPilot:
         self._t_judge: float = 0.0
         self._t_exec: float = 0.0
         self._legs_str: str = ""
+        self._autoload_tried: float = 0.0
+        self._boot_enter_sent = False
+        self._menu_wait_start = time.monotonic()
+        self._autoload_issued: float = 0.0
+        self._autoload_entered = False
+        self._boot_enter_sent = False
+        self._menu_wait_start = time.monotonic()
         self._trade_step_turn: int | None = None
         self._diplo_stmt: dict[int, dict] = {}
         self._strategy: dict | None = None   # {"path": "science", "since_turn": N}
@@ -700,6 +707,94 @@ class AutoPilot:
                             lambda: bridge.alive()
                             and not bridge.game_loaded()):
                         self._set(step="waiting_for_game", connected=True)
+                        autosave = (self.cfg.autopilot.autosave_load or "").strip()
+                        if autosave and (time.monotonic() - (self._autoload_tried or 0)) > 60:
+                            self._autoload_tried = time.monotonic()
+                            self.journal.add("action", {
+                                "tool": "autoload", "args": {"save": autosave},
+                                "result": "menu detected — loading configured "
+                                          "save via the bridge (no operator)"},
+                                turn=self.status.get("turn"))
+                            r = await self._act(bridge, "load_save_menu",
+                                                {"save_name": autosave},
+                                                self.status.get("turn"),
+                                                timeout=90.0)
+                            self.journal.add("action", {
+                                "tool": "autoload_result", "args": {},
+                                "result": str(r)[:150]},
+                                turn=self.status.get("turn"))
+                            if str(r).startswith("OK:LOADING"):
+                                # The load flow calls Network.LeaveGame()
+                                # which drops our connection — any post-load
+                                # step here would never run. The menu_wait
+                                # loop handles the intro-card ENTER on a
+                                # timer (see below) because during the intro
+                                # card the tuner handshake is EMPTY and
+                                # probing it poisons the tuner.
+                                self._autoload_issued = time.monotonic()
+                                await asyncio.sleep(30.0)
+                            else:
+                                await asyncio.sleep(15.0)
+                            continue
+                        # Poke a dispatched call: it runs _ensure(), which
+                        # re-discovers InGame states once the save finishes
+                        # loading — without this the loop would wait forever
+                        # (no dispatched calls, no rediscovery).
+                        # A forced game kill makes the next boot pause on a
+                        # "CONTINUE GAME" resume card BEFORE the main menu —
+                        # dismiss it once, early (also covers the post-load
+                        # leader intro card). Harmless ENTER at a real menu.
+                        if (not self._boot_enter_sent
+                                and time.monotonic() - self._menu_wait_start > 20):
+                            self._boot_enter_sent = True
+                            try:
+                                import urllib.request as _u
+                                req = _u.Request(
+                                    "http://host.docker.internal:14319/press",
+                                    data=json.dumps({"key": "ENTER"}).encode(),
+                                    headers={"Content-Type":
+                                             "application/json"})
+                                with _u.urlopen(req, timeout=8) as resp_:
+                                    press = resp_.read().decode()[:80]
+                                self.journal.add("action", {
+                                    "tool": "boot_enter", "args": {},
+                                    "result": press}, turn=None)
+                            except Exception as e:  # noqa: BLE001
+                                self.journal.add("action", {
+                                    "tool": "boot_enter", "args": {},
+                                    "result": f"host helper unreachable: {e}"},
+                                    turn=None)
+                        # Blind intro-card dismissal ~75s after the load
+                        # command: during the leader intro card the tuner
+                        # handshake is EMPTY (probing = poison), so the
+                        # dismissal is timed, not sensed. Host helper only.
+                        if (self._autoload_issued
+                                and not self._autoload_entered
+                                and time.monotonic() - self._autoload_issued > 75):
+                            self._autoload_entered = True
+                            try:
+                                import urllib.request as _u
+                                req = _u.Request(
+                                    "http://host.docker.internal:14319/press",
+                                    data=json.dumps({"key": "ENTER"}).encode(),
+                                    headers={"Content-Type":
+                                             "application/json"})
+                                with _u.urlopen(req, timeout=8) as resp_:
+                                    press = resp_.read().decode()[:80]
+                            except Exception as e:  # noqa: BLE001
+                                press = (f"host helper unreachable ({e}) — "
+                                         f"operator: press ENTER on the "
+                                         f"intro card")
+                            self.journal.add("action", {
+                                "tool": "autoload_enter", "args": {},
+                                "result": press}, turn=self.status.get("turn"))
+                        if await asyncio.to_thread(bridge.menu_ping):
+                            self.journal.add("action", {
+                                "tool": "menu_wait", "args": {},
+                                "result": "game states discovered — "
+                                          "save loaded, resuming",
+                            }, turn=self.status.get("turn"))
+                            continue
                         self.journal.add("action", {
                             "tool": "menu_wait", "args": {},
                             "result": "bridge alive at main menu — "
@@ -2460,6 +2555,7 @@ class AutoPilot:
                     total_handled += 1
                     handled[kind] = handled.get(kind, 0) + 1
                     if handled[kind] > BLOCKER_PER_KIND_CAP or total_handled > BLOCKER_TOTAL_CAP:
+                        await self._capture_stall_dossier(bridge, before)
                         self._pause(f"end_turn blocked repeatedly ({kind}) — manual attention needed")
                         return
                     self._set(step=f"handling_{kind}")
@@ -2568,6 +2664,7 @@ class AutoPilot:
                     continue
                 await asyncio.sleep(1.5)  # unknown shape — retry within budget
             if not self._stop_flag:
+                await self._capture_stall_dossier(bridge, before)
                 self._pause(
                     f"turn did not advance within {int(ap.turn_wait_timeout_s)}s")
         finally:

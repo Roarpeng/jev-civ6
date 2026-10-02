@@ -1527,6 +1527,70 @@ class GameState:
         lines = await self.conn.execute_write(lua)
         return _action_result(lines)
 
+    async def load_save_menu(self, save_name: str) -> str:
+        """Load a save from the MAIN MENU (frontend context).
+
+        The old load_game_save needs InGame states, which do not exist at
+        the menu. This runs the query+load in the MainMenu tuner state
+        where SaveLocations/SaveTypes/Network are all live. Blocks until
+        the engine accepts the load (or NOT_FOUND).
+        """
+        import asyncio as _aio
+
+        menu_idx = next(
+            (idx for idx, name in self.conn.lua_states.items()
+             if name == "MainMenu"), None)
+        if menu_idx is None:
+            # The menu registers its Lua context late — the bridge may have
+            # connected while only Main State existed. One reconnect re-runs
+            # the handshake and re-parses the (now complete) state list.
+            try:
+                await self.conn.reconnect()
+            except Exception:  # noqa: BLE001
+                pass
+            menu_idx = next(
+                (idx for idx, name in self.conn.lua_states.items()
+                 if name == "MainMenu"), None)
+        if menu_idx is None:
+            seen = ",".join(f"{i}:{n}" for i, n in
+                            sorted(self.conn.lua_states.items()))
+            return (f"ERR:NO_MAIN_MENU|MainMenu not found; states seen: "
+                    f"{seen[:200]}")
+        await self.conn.execute_in_state(menu_idx, (
+            "ExposedMembers.MCPHit = nil "
+            "local target = '" + save_name + "' "
+            "local function OnLoad(fileList, qid) "
+            "  UI.CloseFileListQuery(qid) "
+            "  LuaEvents.FileListQueryResults.Remove(OnLoad) "
+            "  for i, s in ipairs(fileList) do "
+            "    if string.find(s.Name, target, 1, true) then "
+            '      ExposedMembers.MCPHit = s.Name '
+            "      print('LOADING|' .. s.Name) "
+            "      Network.LeaveGame() "
+            "      Network.LoadGame(s, ServerType.SERVER_TYPE_NONE) "
+            "      return "
+            "    end "
+            "  end "
+            "  ExposedMembers.MCPHit = 'NOT_FOUND' "
+            "end "
+            "LuaEvents.FileListQueryResults.Add(OnLoad) "
+            "local opts = SaveLocationOptions.NORMAL + SaveLocationOptions.AUTOSAVE "
+            "+ SaveLocationOptions.QUICKSAVE + SaveLocationOptions.LOAD_METADATA "
+            "UI.QuerySaveGameList(SaveLocations.LOCAL_STORAGE, "
+            "SaveTypes.SINGLE_PLAYER, opts) "
+            "print('LOAD_Q_SENT')"), timeout=8.0)
+        for _ in range(16):
+            await _aio.sleep(1.0)
+            lines = await self.conn.execute_in_state(menu_idx,
+                'print("H|" .. tostring(ExposedMembers.MCPHit))',
+                timeout=6.0)
+            hit = next((l for l in lines
+                        if l.startswith("H|") and l != "H|nil"), None)
+            if hit:
+                return ("OK:LOADING|" + save_name if "NOT_FOUND" not in hit
+                        else "ERR:NOT_FOUND|" + save_name)
+        return "ERR:TIMEOUT|save list query never resolved"
+
     async def orders_batch(self, orders: list) -> str:
         """Set research/civic in ONE roundtrip (see build_orders_batch)."""
         lua = lq.build_orders_batch(orders or [])
