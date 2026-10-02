@@ -6,11 +6,11 @@ LLM（Jev 或任意云端/本地模型）只负责语义判断——研究什么
 
 **战厅 WebUI**（编年史 · 国势 · 军师热插拔 · 心跳判活）：
 
-![战争议事厅 WebUI](docs/images/shot_dashboard.jpg)
+![战争议事厅 WebUI](docs/images/warroom-ui.jpg)
 
 **游戏侧**（AI 正在驾驶的文明6 本体）：
 
-![AI 驾驶中的文明6](docs/images/shot_game.jpg)
+![AI 驾驶中的文明6](docs/images/civ6-game.jpg)
 
 ---
 
