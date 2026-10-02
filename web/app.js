@@ -423,6 +423,19 @@ async function refresh() {
   }
 }
 
+async function heartBeat() {
+  try {
+    const evs = await getJSON("/api/events?limit=1");
+    const last = Array.isArray(evs) ? evs[evs.length - 1] : (evs.events || [])[0];
+    if (!last || !last.ts) return;
+    const age = (Date.now() - new Date(last.ts + "Z").getTime()) / 1000;
+    const el = $("#heart-label");
+    const dot = $("#chip-heart .dot");
+    el.textContent = "活跃 " + (age < 90 ? Math.max(0, Math.round(age)) + "s" : Math.round(age / 60) + "m");
+    dot.className = "dot " + (age < 60 ? "on" : age < 180 ? "warn" : "off");
+  } catch (e) { /* non-fatal */ }
+}
+
 async function refreshLive() {
   const [live, mode] = await Promise.all([
     getJSON("/api/live"),
