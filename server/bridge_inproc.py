@@ -104,6 +104,8 @@ ACTION_TOOLS = {
     "activate_great_person": ("unit_index",),
     "purchase_item": ("city_id", "item_type", "item_name", "yield_type"),
     "spread_religion": ("unit_index",),
+    "religious_units_batch": ("actions",),
+    "orders_batch": ("orders",),
     "get_religion_founding_status": (),
     "found_religion": ("religion_type", "follower_belief", "founder_belief"),
     "choose_pantheon": ("belief_type",),
@@ -461,13 +463,16 @@ class InProcessBridge:
         return data if isinstance(data, list) else []
 
     def warroom_collect(self, pol: bool = False, cs: bool = False,
-                        gov: bool = False) -> dict:
+                        gov: bool = False,
+                        prod_city_ids: list | None = None) -> dict:
         """Whole per-turn collect in ONE batched Lua roundtrip; low-frequency
         sections (policies/city-states/governors) only when flagged."""
-        return self._read(self._warroom_collect(pol, cs, gov))
+        return self._read(
+            self._warroom_collect(pol, cs, gov, prod_city_ids))
 
     async def _warroom_collect(self, want_pol: bool, want_cs: bool,
-                               want_gov: bool) -> dict:
+                               want_gov: bool,
+                               prod_city_ids: list | None = None) -> dict:
         """Body of web_api's /api/warroom_collect: two batched roundtrips
         (InGame write + GameCore read) with SECTION|-delimited scripts,
         parsed by the same civ_mcp.lua parsers the endpoint used."""
@@ -495,6 +500,8 @@ class InProcessBridge:
             + _strip_trailing_sentinel(lq.build_tech_civics_query())
             + ' print("SECTION|threats"); '
             + lq.build_threat_scan_query()
+            + ' print("SECTION|promos"); '
+            + lq.build_gc_promo_scan()
         )
         if want_pol:
             lua += (' print("SECTION|policies"); '
@@ -504,9 +511,28 @@ class InProcessBridge:
                     + _strip_trailing_sentinel(lq.build_city_states_query()))
         if want_gov:
             lua += ' print("SECTION|gov"); ' + lq.build_governors_query()
+        # reflex probes: pantheon flag + production options for KNOWN idle
+        # cities (ids passed from the previous snapshot — batches up to 3
+        # separate roundtrips into this one script)
+        lua += ' print("SECTION|panflag"); ' + lq.build_wr_pantheon_flag()
+        for cid in (prod_city_ids or [])[:3]:
+            try:
+                lua += (f' print("SECTION|prod_{int(cid)}"); '
+                        + _strip_trailing_sentinel(
+                            lq.build_city_production_query(int(cid))))
+            except Exception:  # noqa: BLE001 — one bad id must not kill collect
+                pass
 
-        w_sections = _split_sections(await conn.execute_write(lua))
-        r_sections = _split_sections(await conn.execute_read(gc_lua))
+        import time as _t
+        _t0 = _t.monotonic()
+        w_lines = await conn.execute_write(lua)
+        _t1 = _t.monotonic()
+        r_lines = await conn.execute_read(gc_lua)
+        _t2 = _t.monotonic()
+        _leg_timing = {"ingame": round(_t1 - _t0, 2),
+                       "gamecore": round(_t2 - _t1, 2)}
+        w_sections = _split_sections(w_lines)
+        r_sections = _split_sections(r_lines)
 
         wr = lq.parse_wr_lines(w_sections.get("wr", []))
         pol_data = (lq.parse_policies_response(w_sections.get("policies", []))
@@ -521,7 +547,36 @@ class InProcessBridge:
             w_sections.get("cities", []))
         tech = lq.parse_tech_civics_response(r_sections.get("tech", []))
         threats = lq.parse_threat_scan_response(r_sections.get("threats", []))
+        # reflex probes (folded into the two collect legs — zero extra
+        # roundtrips vs the old per-unit/per-city query chains)
+        pan_flag = None
+        for ln in w_sections.get("panflag", []):
+            if ln.startswith("PANFLAG|"):
+                parts = ln.split("|")
+                pan_flag = {"has_pantheon": parts[1] == "1",
+                            "faith": float(parts[2]) if len(parts) > 2 else 0.0}
+                break
+        promos = []
+        for ln in r_sections.get("promos", []):
+            if ln.startswith("PROMO|"):
+                parts = ln.split("|")
+                if len(parts) >= 3:
+                    promos.append({"unit_id": int(parts[1]),
+                                   "promotion_type": parts[2]})
+        prod_by_city = {}
+        for key, lines_ in w_sections.items():
+            if key.startswith("prod_"):
+                try:
+                    cid = int(key[5:])
+                except ValueError:
+                    continue
+                opts = lq.parse_city_production_response(lines_)
+                prod_by_city[cid] = _to_dict(opts)
         return {
+            "_leg_timing": _leg_timing,
+            "pantheon_flag": pan_flag,
+            "promos": promos,
+            "prod_by_city": prod_by_city,
             "overview": _to_dict(ov),
             "units": _to_dict(units),
             "cities": [_to_dict(cities), distances],

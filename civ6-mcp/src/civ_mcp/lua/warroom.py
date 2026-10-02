@@ -275,3 +275,89 @@ def parse_wr_lines(lines: list[str]) -> dict:
         elif line.startswith("WR_OK|"):
             footer = line[6:]
     return {"events": events, "event_names": names, "footer": footer}
+
+
+def build_wr_pantheon_flag() -> str:
+    """One-line pantheon probe for the collect InGame leg (the reflex runs
+    the full query only when this shows no pantheon yet)."""
+    return """
+local me = Game.GetLocalPlayer()
+local pRel = Players[me]:GetReligion()
+print("PANFLAG|" .. (pRel:GetPantheon() >= 0 and "1" or "0")
+      .. "|" .. string.format("%.0f", pRel:GetFaithBalance()))
+"""
+
+
+def build_gc_promo_scan(limit: int = 12) -> str:
+    """Promotion candidates for our units (GameCore leg).
+
+    Prints PROMO|unit_id|first_available_promotion_type for up to `limit`
+    units ready to promote — folds the old per-unit query chain (one Lua
+    roundtrip PER UNIT) into the collect's existing GameCore roundtrip.
+    """
+    return f"""
+local me = Game.GetLocalPlayer()
+local count = 0
+for _, unit in Players[me]:GetUnits():Members() do
+  if count >= {limit} then break end
+  local uType = unit:GetType()
+  if uType and unit:GetX() ~= -9999 then
+    local info = GameInfo.Units[uType]
+    local promClass = info and info.PromotionClass or ""
+    if promClass ~= "" then
+      local okE, exp = pcall(function() return unit:GetExperience() end)
+      if okE and exp then
+        local xp, need = 0, -1
+        pcall(function() xp = exp:GetExperiencePoints() end)
+        pcall(function() need = exp:GetExperienceForNextLevel() end)
+        if need and need > 0 and xp >= need then
+          for promo in GameInfo.UnitPromotions() do
+            if promo.PromotionClass == promClass then
+              local has, can = true, false
+              pcall(function() has = exp:HasPromotion(promo.Index) end)
+              pcall(function() can = exp:CanPromote(promo.Index) end)
+              if not has and can then
+                print("PROMO|" .. unit:GetID() .. "|" .. promo.UnitPromotionType)
+                count = count + 1
+                break
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+end
+"""
+
+def build_orders_batch(orders: list) -> str:
+    """Combined research/civic orders in ONE roundtrip (InGame context).
+
+    orders: [{"kind": "research"|"civic", "name": str}] — each block is
+    pcall-guarded and prints ORD|<kind>|ok|<name> or ORD|<kind>|err|<why>.
+    Production orders intentionally stay on set_city_production (they need
+    placement coords and richer validation).
+    """
+    chunks = []
+    for o in orders:
+        k = o.get("kind")
+        n = str(o.get("name", "")).replace('"', '')
+        if k in ("research", "civic") and n:
+            table = "Technologies" if k == "research" else "Civics"
+            setter = ("SetResearchProject" if k == "research" else "SetCivic")
+            chunk = (
+                'do local ok, e = pcall(function()\n'
+                f'  local info = GameInfo.{table}["{n}"]\n'
+                '  if not info then error("not found") end\n'
+                '  local p = Players[Game.GetLocalPlayer()]:'
+                + ("GetTechs()" if k == "research" else "GetCulture()")
+                + '\n'
+                f'  p:{setter}(info.Index, true)\n'
+                f'  print("ORD|{k}|ok|{n}")\n'
+                'end)\n'
+                'if not ok then print("ORD|' + k + '|err|"'
+                + ' .. tostring(e):gsub("%|","/"):sub(1,60)) end end\n'
+            )
+            chunks.append(chunk)
+    body = "\n".join(chunks) if chunks else 'print("ORD|none|ok|")'
+    return body + '\nprint("SENTINEL_BATCH|")\n'

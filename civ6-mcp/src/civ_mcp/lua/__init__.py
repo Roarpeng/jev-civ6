@@ -20,6 +20,9 @@ works identically to the old monolithic ``lua_queries`` module.
 from civ_mcp.lua._helpers import SENTINEL  # noqa: F401
 from civ_mcp.lua.warroom import (  # noqa: F401
     build_wr_drain,
+    build_gc_promo_scan,
+    build_orders_batch,
+    build_wr_pantheon_flag,
     build_wr_preflight,
     parse_wr_lines,
     parse_wr_preflight,
@@ -266,6 +269,7 @@ from civ_mcp.lua.religion import (  # noqa: F401
     build_pantheon_status_query,
     build_religion_beliefs_query,
     build_religion_status_query,
+    build_religious_units_batch,
     build_spread_religion,
     parse_pantheon_status_response,
     parse_religion_beliefs_response,

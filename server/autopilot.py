@@ -455,6 +455,14 @@ class AutoPilot:
         self._borders_tried: dict[str, int] = {}
         self._promo_step_turn: int | None = None
         self._district_dead: dict[tuple, int] = {}
+        self._cycle_col: dict | None = None
+        self._t_collect: float = 0.0
+        self._t_prod: float = 0.0
+        self._t_reflex: float = 0.0
+        self._t_judge: float = 0.0
+        self._t_exec: float = 0.0
+        self._legs_str: str = ""
+        self._trade_step_turn: int | None = None
         self._strategy: dict | None = None   # {"path": "science", "since_turn": N}
         self._religion_founding_started = False
         self._last_policy_review: int | None = None
@@ -635,12 +643,32 @@ class AutoPilot:
                     if not await asyncio.to_thread(bridge.healthy):
                         raise ConnectionError("bridge lost — respawning")
                     async with self._decide_lock:
+                        t0 = time.monotonic()
                         await self._decide_cycle(bridge, prev_snapshot)
+                        self.journal.add("action", {
+                            "tool": "cycle_timing", "args": {},
+                            "result": (f"decide={time.monotonic()-t0:.1f}s "
+                                       f"collect={self._t_collect:.1f}s "
+                                       f"prod={self._t_prod:.1f}s "
+                                       f"reflex={self._t_reflex:.1f}s "
+                                       f"judge={self._t_judge:.1f}s "
+                                       f"exec={self._t_exec:.1f}s "
+                                       f"legs={self._legs_str}s"),
+                        }, turn=self.status.get("turn"))
                     prev_snapshot = self.status.get("last_snapshot")
                     fails = 0
                     await self._advance_turn(bridge)
                     if self.status["step"] == "auto_paused":
                         break  # blocker/stall pause decided inside advance
+                    # engine settle probe (see comment above) — wait until the
+                    # game answers quickly before the next decide cycle
+                    settle0 = time.monotonic()
+                    while time.monotonic() - settle0 < 3.0:
+                        p0 = time.monotonic()
+                        await asyncio.to_thread(_quick_state, bridge)
+                        if (time.monotonic() - p0) < 0.4:
+                            break
+                        await asyncio.sleep(0.4)
                 except asyncio.CancelledError:
                     raise
                 except ConnectionError as e:
@@ -702,10 +730,20 @@ class AutoPilot:
                    or any("InfluenceChanged" in n for n in ev_names))
         want_gov = (turn_hint % 10 == 0
                     or any("Governor" in n for n in ev_names))
+        t_collect0 = time.monotonic()
+        idle_ids = [c.get("city_id") for c in
+                    ((prev_snapshot or {}).get("cities") or [])
+                    if c.get("city_id") is not None
+                    and _is_building_idle(c.get("currently_building"))][:3]
         col = await asyncio.to_thread(
-            bridge.warroom_collect, want_pol, want_cs, want_gov)
+            bridge.warroom_collect, want_pol, want_cs, want_gov, idle_ids)
         if not isinstance(col, dict) or "error" in col:
             raise ConnectionError(f"bridge collect failed: {col}")
+        t_collect = time.monotonic() - t_collect0
+        self._t_collect = t_collect
+        self._cycle_col = col
+        self._legs_str = "".join(str(v) for v in
+            (col.get("_leg_timing") or {}).values())
         ov = col.get("overview") or {}
         units = col.get("units") or []
         cities_raw = col.get("cities") or []
@@ -732,17 +770,26 @@ class AutoPilot:
         if isinstance(cities, dict):
             cities = []
 
-        # production options for every idle city (cap 3 to bound call count)
+        # production options for every idle city — batched into the collect
+        # (prod_by_city section) when the previous snapshot told us which
+        # cities would be idle; the per-city query is only the cold fallback.
+        t_prod0 = time.monotonic()
         prod_by_city: list = []
+        batched = col.get("prod_by_city") or {}
         for c in cities:
             if not _is_building_idle(c.get("currently_building")):
                 continue
             if len(prod_by_city) >= 3:
                 break
-            opts = await asyncio.to_thread(bridge.production_options, c["city_id"])
+            opts = batched.get(c.get("city_id"))
+            if opts is None:
+                opts = await asyncio.to_thread(
+                    bridge.production_options, c["city_id"])
             if isinstance(opts, list):
                 prod_by_city.append({"city_id": c.get("city_id"),
                                      "name": c.get("name"), "options": opts})
+        t_prod = time.monotonic() - t_prod0
+        self._t_prod = t_prod
 
         # settle candidates when a settler stands without an active plan
         settle_candidates: list = []
@@ -880,6 +927,7 @@ class AutoPilot:
         # (the defining move of the religion victory path)
         await self._advance_prophet(bridge, snapshot, snapshot["turn"])
 
+        t_reflex0 = time.monotonic()
         # pantheon the moment faith allows (forced modal unblock)
         await self._ensure_pantheon(bridge, snapshot["turn"])
 
@@ -921,6 +969,7 @@ class AutoPilot:
                     "governor_type": g.get("governor_type"),
                     "city_id": target.get("city_id")}, turn=snapshot["turn"])
 
+        self._t_reflex = time.monotonic() - t_reflex0
         # 2. gate
         self._set(step="gating")
         gate = self.gate_fn(snapshot, prev_snapshot)
@@ -948,10 +997,13 @@ class AutoPilot:
             }, turn=snapshot["turn"])
             if err:
                 raise RuntimeError(f"LLM judgment failed: {err}")
-            # 4. execute via HTTP actions
+            # 4. execute
             self._set(step="executing")
+            t_exec0 = time.monotonic()
+            self._t_judge = (latency_ms or 0) / 1000.0
             await self._execute(bridge, (resp or {}).get("answers") or {},
                                 gate["questions"], snapshot, snapshot["turn"])
+            self._t_exec = time.monotonic() - t_exec0
 
     async def _act(self, bridge: Bridge, tool: str, args: dict, turn: int,
                    timeout: float = 60.0) -> str:
@@ -963,6 +1015,7 @@ class AutoPilot:
     async def _execute(self, bridge: Bridge, answers: dict, questions: dict,
                        snapshot: dict, turn: int) -> None:
         tactics_answers: list[tuple[str, dict]] = []
+        _pending_orders: list[dict] = []
         policy_assignments: dict[str, str] = {}
         for qid, ans in answers.items():
             if not isinstance(ans, dict):
@@ -987,11 +1040,11 @@ class AutoPilot:
                                 turn)
                 continue
             if qid == "research_pick" and ans.get("choice"):
-                await self._act(bridge, "set_research",
-                                {"tech_name": ans["choice"]}, turn)
+                _pending_orders.append({"kind": "research",
+                                        "name": str(ans["choice"])})
             elif qid == "civic_pick" and ans.get("choice"):
-                await self._act(bridge, "set_civic",
-                                {"civic_name": ans["choice"]}, turn)
+                _pending_orders.append({"kind": "civic",
+                                        "name": str(ans["choice"])})
             elif qid.startswith("production_pick") and ans.get("choice"):
                 city_id = (questions.get(qid) or {}).get("city_id")
                 choice = str(ans["choice"])
@@ -1085,6 +1138,9 @@ class AutoPilot:
             self._last_policy_review = turn
             self._save_state()
 
+        if _pending_orders:
+            await self._act(bridge, "orders_batch",
+                            {"orders": _pending_orders}, turn)
         if tactics_answers:
             await self._execute_tactics_batch(
                 bridge, tactics_answers, questions, snapshot, turn)
@@ -1321,11 +1377,12 @@ class AutoPilot:
             m = re.match(r"^(-?\d+),(-?\d+)$", k)
             if m:
                 targets.append((int(m.group(1)), int(m.group(2))))
-        # spread only works in/adjacent to a city — skip the doomed attempt
-        # (and its error roundtrip) when the unit stands elsewhere (e.g. on
-        # the Holy Site district tile).
+        # spread only works in/adjacent to a city; everything (spreads +
+        # moves toward foreign targets) is dispatched in ONE batched Lua
+        # roundtrip via religious_units_batch.
         city_pts = targets + [tuple(c.get("at") or (None, None))
                               for c in (snapshot.get("cities") or [])]
+        actions: list = []
         for u in (snapshot.get("units") or []):
             t = str(u.get("type", "")).upper()
             if not ("MISSIONARY" in t or "APOSTLE" in t):
@@ -1336,31 +1393,26 @@ class AutoPilot:
                 p[0] is not None and _hex_distance(
                     at[0], at[1], p[0], p[1]) <= 1
                 for p in city_pts)
-            r = ""
             if near_city:
-                r = await self._act(bridge, "spread_religion",
-                                    {"unit_index": ui}, turn)
-                if "Error" not in r:
-                    self.journal.add("action", {
-                        "tool": "spread_religion", "args": {"unit_index": ui},
-                        "result": str(r)[:120]}, turn=turn)
-                    continue
-            if targets:
-                at2 = u.get("at") or [0, 0]
+                actions.append({"unit_index": ui, "spread": True})
+            elif targets:
                 t0 = min(targets, key=lambda xy: _hex_distance(
-                    at2[0], at2[1], xy[0], xy[1]))
+                    at[0], at[1], xy[0], xy[1]))
                 key = (turn, ui, t0[0], t0[1])
                 if key not in self._tried_moves:
                     self._tried_moves.add(key)
-                    mv = await self._act(bridge, "move_unit", {
-                        "unit_index": ui,
-                        "target_x": t0[0], "target_y": t0[1]}, turn)
-                    if "need Open Borders" in mv or "foreign territory" in mv:
-                        m2 = re.search(
-                            r"foreign territory \(([^)]+)\)", mv)
-                        if m2:
-                            civ = m2.group(1).strip()
-                            self._borders_blocked[civ] = turn
+                    actions.append({"unit_index": ui, "spread": False,
+                                    "target_x": t0[0], "target_y": t0[1]})
+        if actions:
+            r = await self._act(bridge, "religious_units_batch",
+                                {"actions": actions}, turn)
+            for m2 in re.finditer(
+                    r"MOVERR\|\d+\|.*foreign territory \(([^)]+)\)", r):
+                self._borders_blocked[m2.group(1).strip()] = turn
+            self.journal.add("action", {
+                "tool": "religious_units_batch",
+                "args": {"n": len(actions)},
+                "result": str(r)[:200]}, turn=turn)
 
     async def _request_open_borders(self, bridge: Bridge, snapshot: dict,
                                     turn: int) -> None:
@@ -1457,6 +1509,9 @@ class AutoPilot:
         a Jev round-trip per route would cost more than it earns):
         city-state quest > international > domestic, plus raw yields.
         """
+        if (self._trade_step_turn or -1) + 1 > turn:
+            return  # every 2nd turn — the probe costs one Lua roundtrip
+        self._trade_step_turn = turn
         try:
             st = await asyncio.to_thread(bridge.act_data,
                                          "get_trade_routes", {})
@@ -1516,36 +1571,14 @@ class AutoPilot:
         turn) and keeps military units leveled. Deterministic first option;
         revisit with Jev if options start mattering tactically.
         """
-        if self._promo_step_turn == turn:
-            return
-        self._promo_step_turn = turn
-        checked = 0
-        for u in (snapshot.get("units") or []):
-            if checked >= 12:
-                break
-            uid = u.get("unit_id", u.get("unit_index"))
-            if uid is None:
-                continue
-            checked += 1
-            try:
-                st = await asyncio.to_thread(
-                    bridge.act_data, "get_unit_promotions",
-                    {"unit_id": int(uid)})
-            except Exception:  # noqa: BLE001
-                continue
-            if not isinstance(st, dict):
-                continue
-            promos = st.get("promotions") or []
-            if not promos:
-                continue
-            pick = next((p_ for p_ in promos
-                         if isinstance(p_, dict) and p_.get("promotion_type")),
-                        None)
-            if pick is None:
+        # promo candidates arrive pre-scanned in the collect (PROMO| lines
+        # from the GameCore leg) — this reflex is now write-only, no queries.
+        for cand in (self._cycle_col or {}).get("promos") or []:
+            if not isinstance(cand, dict):
                 continue
             await self._act(bridge, "promote_unit", {
-                "unit_id": int(uid),
-                "promotion_type": str(pick["promotion_type"])}, turn)
+                "unit_id": int(cand["unit_id"]),
+                "promotion_type": str(cand["promotion_type"])}, turn)
 
     async def _ensure_pantheon(self, bridge: Bridge, turn: int) -> None:
         """Choose a pantheon the moment faith allows it.
@@ -1554,11 +1587,24 @@ class AutoPilot:
         before a Great Prophet shows up — the old flow only picked it during
         religion founding. Runs every decide cycle; no-ops once chosen.
         """
-        try:
-            st = await asyncio.to_thread(bridge.act_data,
-                                         "get_pantheon_status", {})
-        except Exception:  # noqa: BLE001
-            return
+        flag = (self._cycle_col or {}).get("pantheon_flag")
+        if isinstance(flag, dict) and flag.get("has_pantheon"):
+            return  # collect probe says pantheon already chosen — no query
+        st = None
+        if isinstance(flag, dict):
+            # probe present and says NO pantheon → fetch the option list
+            try:
+                st = await asyncio.to_thread(bridge.act_data,
+                                             "get_pantheon_status", {})
+            except Exception:  # noqa: BLE001
+                return
+        else:
+            # probe missing (old collect shape) → original path
+            try:
+                st = await asyncio.to_thread(bridge.act_data,
+                                             "get_pantheon_status", {})
+            except Exception:  # noqa: BLE001
+                return
         if not isinstance(st, dict):
             return
         if st.get("has_pantheon"):

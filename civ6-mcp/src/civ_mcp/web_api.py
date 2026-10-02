@@ -75,6 +75,8 @@ ACTION_TOOLS = {
     "activate_great_person": ("unit_index",),
     "purchase_item": ("city_id", "item_type", "item_name", "yield_type"),
     "spread_religion": ("unit_index",),
+    "religious_units_batch": ("actions",),
+    "orders_batch": ("orders",),
     "get_religion_founding_status": (),
     "found_religion": ("religion_type", "follower_belief", "founder_belief"),
     "choose_pantheon": ("belief_type",),

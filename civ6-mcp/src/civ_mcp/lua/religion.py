@@ -389,3 +389,60 @@ def parse_religion_status_response(lines: list[str]) -> ReligionStatus:
                     )
                 )
     return ReligionStatus(cities=cities, summary=summary)
+
+
+def build_religious_units_batch(actions: list[dict]) -> str:
+    """Batched religious-unit actions in ONE roundtrip (InGame context).
+
+    actions: [{unit_index, spread: bool, target_x, target_y}] — spread when
+    `spread` (pcall-guarded; failures print SPERR|), else move toward the
+    target. Prints SPOK|/SPERR|/MOV| lines per unit.
+    """
+    chunks = []
+    for a in actions:
+        ui = int(a["unit_index"])
+        if a.get("spread"):
+            chunks.append(f"""
+do local ok, err = pcall(function()
+  local unit = UnitManager.GetUnit(Game.GetLocalPlayer(), {ui})
+  if not unit then error("no unit") end
+  if unit:GetMovesRemaining() <= 0 then error("no moves") end
+  if (unit:GetSpreadCharges() or 0) <= 0 then error("no charges") end
+  local ux, uy = unit:GetX(), unit:GetY()
+  local opRow = GameInfo.UnitOperations["UNITOPERATION_SPREAD_RELIGION"]
+  if not opRow then error("op missing") end
+  local params = {{}}
+  params[UnitOperationTypes.PARAM_X] = ux
+  params[UnitOperationTypes.PARAM_Y] = uy
+  if UnitManager.CanStartOperation(unit, opRow.Hash, nil, params, true) then
+    UnitManager.RequestOperation(unit, opRow.Hash, params)
+    print("SPOK|" .. {ui} .. "|" .. (unit:GetSpreadCharges() or 0))
+  else
+    error("cannot spread here")
+  end
+end)
+if not ok then print("SPERR|" .. {ui} .. "|" .. tostring(err):gsub("%|","/"):sub(1,60)) end end
+""")
+        else:
+            tx = int(a.get("target_x", 0))
+            ty = int(a.get("target_y", 0))
+            chunks.append(f"""
+do local ok, err = pcall(function()
+  local unit = UnitManager.GetUnit(Game.GetLocalPlayer(), {ui})
+  if not unit then error("no unit") end
+  local opRow = GameInfo.UnitOperations["UNITOPERATION_MOVE_TO"]
+  if not opRow then error("op missing") end
+  local params = {{}}
+  params[UnitOperationTypes.PARAM_X] = {tx}
+  params[UnitOperationTypes.PARAM_Y] = {ty}
+  if UnitManager.CanStartOperation(unit, opRow.Hash, nil, params, true) then
+    UnitManager.RequestOperation(unit, opRow.Hash, params)
+    print("MOV|" .. {ui} .. "|to {tx},{ty}")
+  else
+    error("cannot move")
+  end
+end)
+if not ok then print("MOVERR|" .. {ui} .. "|" .. tostring(err):gsub("%|","/"):sub(1,60)) end end
+""")
+    body = "\n".join(chunks) if chunks else 'print("BATCH_EMPTY|")'
+    return body + '\nprint("SENTINEL_BATCH|")\n'

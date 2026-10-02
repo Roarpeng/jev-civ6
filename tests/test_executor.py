@@ -60,9 +60,11 @@ class ExecutorTests(unittest.IsolatedAsyncioTestCase):
                    "civic_pick": {"type": "choice",
                                   "choice": "CIVIC_CRAFTSMANSHIP"}}
         await pilot._execute(bridge, answers, {}, snapshot, 5)
-        self.assertEqual([c[0] for c in bridge.calls], ["set_research", "set_civic"])
-        self.assertEqual(bridge.calls[0][1]["tech_name"], "TECH_MINING")
-        self.assertEqual(bridge.calls[1][1]["civic_name"], "CIVIC_CRAFTSMANSHIP")
+        # research+civic now dispatch in ONE orders_batch roundtrip
+        self.assertEqual([c[0] for c in bridge.calls], ["orders_batch"])
+        kinds = {o["kind"]: o["name"] for o in bridge.calls[0][1]["orders"]}
+        self.assertEqual(kinds, {"research": "TECH_MINING",
+                                 "civic": "CIVIC_CRAFTSMANSHIP"})
 
     async def test_production_uses_city_meta(self):
         pilot = _make_pilot()

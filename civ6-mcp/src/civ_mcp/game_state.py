@@ -1527,6 +1527,21 @@ class GameState:
         lines = await self.conn.execute_write(lua)
         return _action_result(lines)
 
+    async def orders_batch(self, orders: list) -> str:
+        """Set research/civic in ONE roundtrip (see build_orders_batch)."""
+        lua = lq.build_orders_batch(orders or [])
+        lines = await self.conn.execute_write(lua)
+        out = [ln for ln in lines if ln.startswith(("ORD|",))]
+        return "\n".join(out) or "ORD|none|ok|"
+
+    async def religious_units_batch(self, actions: list) -> str:
+        """All religious-unit actions (spread + moves) in ONE roundtrip."""
+        lua = lq.build_religious_units_batch(actions or [])
+        lines = await self.conn.execute_write(lua)
+        out = [ln for ln in lines if ln.startswith(
+            ("SPOK|", "SPERR|", "MOV|", "MOVERR|", "BATCH_EMPTY"))]
+        return "\n".join(out) or "BATCH_EMPTY"
+
     async def spread_religion(self, unit_index: int) -> str:
         lua = lq.build_spread_religion(unit_index)
         lines = await self.conn.execute_write(lua)
