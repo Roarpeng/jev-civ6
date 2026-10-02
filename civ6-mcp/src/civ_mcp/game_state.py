@@ -1531,8 +1531,19 @@ class GameState:
         """Set research/civic in ONE roundtrip (see build_orders_batch)."""
         lua = lq.build_orders_batch(orders or [])
         lines = await self.conn.execute_write(lua)
-        out = [ln for ln in lines if ln.startswith(("ORD|",))]
-        return "\n".join(out) or "ORD|none|ok|"
+        # per-order outcomes: the builders print OK:RESEARCHING /
+        # OK:PROGRESSING / ERR:... — normalize into ORD|kind|ok/err lines
+        out = []
+        for ln in lines:
+            if ln.startswith("OK:RESEARCHING"):
+                out.append("ORD|research|ok|" + (ln.split("|", 1)[1] if "|" in ln else ""))
+            elif ln.startswith("OK:PROGRESSING"):
+                out.append("ORD|civic|ok|" + (ln.split("|", 1)[1] if "|" in ln else ""))
+            elif ln.startswith("ERR:"):
+                out.append("ORD|order|err|" + ln[:90])
+        if not out:
+            out = ["ORD|none|ok|"]
+        return "\n".join(out)
 
     async def religious_units_batch(self, actions: list) -> str:
         """All religious-unit actions (spread + moves) in ONE roundtrip."""

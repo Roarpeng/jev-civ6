@@ -350,34 +350,36 @@ for _, unit in Players[me]:GetUnits():Members() do
 end
 """
 
+
+
 def build_orders_batch(orders: list) -> str:
     """Combined research/civic orders in ONE roundtrip (InGame context).
 
-    orders: [{"kind": "research"|"civic", "name": str}] — each block is
-    pcall-guarded and prints ORD|<kind>|ok|<name> or ORD|<kind>|err|<why>.
-    Production orders intentionally stay on set_city_production (they need
-    placement coords and richer validation).
+    Reuses the battle-tested set_research / set_civic builder bodies
+    verbatim (trailing sentinels stripped) instead of hand-rolled API
+    calls — an earlier hand-rolled version used a nonexistent
+    SetResearchProject and failed silently EVERY turn while the executor
+    saw a success-shaped result. Each order prints its own OK:/ERR: lines.
     """
+    from civ_mcp.lua._helpers import SENTINEL
+    from civ_mcp.lua.tech import build_set_research, build_set_civic
+
     chunks = []
-    for o in orders:
+    for o in orders or []:
         k = o.get("kind")
-        n = str(o.get("name", "")).replace('"', '')
-        if k in ("research", "civic") and n:
-            table = "Technologies" if k == "research" else "Civics"
-            setter = ("SetResearchProject" if k == "research" else "SetCivic")
-            chunk = (
-                'do local ok, e = pcall(function()\n'
-                f'  local info = GameInfo.{table}["{n}"]\n'
-                '  if not info then error("not found") end\n'
-                '  local p = Players[Game.GetLocalPlayer()]:'
-                + ("GetTechs()" if k == "research" else "GetCulture()")
-                + '\n'
-                f'  p:{setter}(info.Index, true)\n'
-                f'  print("ORD|{k}|ok|{n}")\n'
-                'end)\n'
-                'if not ok then print("ORD|' + k + '|err|"'
-                + ' .. tostring(e):gsub("%|","/"):sub(1,60)) end end\n'
-            )
-            chunks.append(chunk)
-    body = "\n".join(chunks) if chunks else 'print("ORD|none|ok|")'
-    return body + '\nprint("SENTINEL_BATCH|")\n'
+        n = str(o.get("name", ""))
+        if not n:
+            continue
+        body = None
+        if k == "research":
+            body = build_set_research(n)
+        elif k == "civic":
+            body = build_set_civic(n)
+        if body:
+            marker = 'print("' + SENTINEL + '")'
+            if marker in body:
+                body = body[:body.rfind(marker)]
+            chunks.append(body.rstrip())
+    if not chunks:
+        return 'print("ORD|none|ok|")\nprint("' + SENTINEL + '")\n'
+    return "\n".join(chunks) + '\nprint("' + SENTINEL + '")\n'

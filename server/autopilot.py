@@ -1195,8 +1195,24 @@ class AutoPilot:
             self._save_state()
 
         if _pending_orders:
-            await self._act(bridge, "orders_batch",
-                            {"orders": _pending_orders}, turn)
+            r = await self._act(bridge, "orders_batch",
+                                {"orders": _pending_orders}, turn)
+            if "err|" in r.lower() or "Error" in r:
+                # A batch-level failure must NEVER silently swallow orders
+                # (that starved research+civic for a whole session once);
+                # retry each order through its single-order channel.
+                self.journal.add("action", {
+                    "tool": "orders_batch_fallback", "args": {
+                        "orders": _pending_orders},
+                    "result": "batch reported errors — retrying individually"},
+                    turn=turn)
+                for o in _pending_orders:
+                    if o.get("kind") == "research":
+                        await self._act(bridge, "set_research",
+                                        {"tech_name": o["name"]}, turn)
+                    elif o.get("kind") == "civic":
+                        await self._act(bridge, "set_civic",
+                                        {"civic_name": o["name"]}, turn)
         if tactics_answers:
             await self._execute_tactics_batch(
                 bridge, tactics_answers, questions, snapshot, turn)
