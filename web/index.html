@@ -94,7 +94,7 @@
           </select>
         </label>
         <label>Model <input id="llm-model" placeholder="jev-latest / gpt-4o / qwen2.5:14b …"></label>
-        <label>Base URL <input id="llm-baseurl" placeholder="http://host.docker.internal:11434/v1 (本地)"></label>
+        <label>Base URL <input id="llm-baseurl" placeholder="http://127.0.0.1:11434/v1 (Ollama本地)"></label>
         <label>API Key <input id="llm-apikey" type="password" placeholder="留空=不修改"></label>
         <label>Key 环境变量名 <input id="llm-apikeyenv" placeholder="TYPESAFE_API_KEY"></label>
         <div class="llm-actions">
@@ -106,16 +106,14 @@
     </div>
 
     <div class="panel panel-dim">
-      <h3 class="panel-title">◈ 喂养指南 · FEED</h3>
-      <pre class="feed">curl -X POST localhost:8080/api/gate \
-  -d '{"turn":16,"snapshot":{...}}'     # 先过闸门
-# → should_ask=false: 不调 Jev，直接行动
-# → should_ask=true : 用返回的 questions
-#   定向调用 ↓ （只问触发的题）
+      <h3 class="panel-title">◈ 操控指南 · CONTROL</h3>
+      <pre class="feed">AUTO  : 军师全权驾驶（研究/生产/外交/传教）
+手动  : 玩家接管，军师只记录
 
-curl -X POST localhost:8080/api/jev \
-  -d '{"turn":16,"state":{...},
-       "questions":{...闸门返回的题...}}'</pre>
+换脑  : 上方面板选 provider/模型 → 热替换
+       （本地 Ollama: http://127.0.0.1:11434/v1）
+读档  : 先 AUTO（桥连上游戏）→ 再读档/新局
+改码  : 编辑 server/ 或 civ6-mcp/src → 容器自动热重载</pre>
     </div>
   </aside>
 </main>

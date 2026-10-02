@@ -29,12 +29,15 @@ body {
     radial-gradient(900px 600px at 105% 30%, rgba(79, 209, 197, 0.06), transparent 55%),
     radial-gradient(700px 500px at 40% 110%, rgba(122, 165, 248, 0.05), transparent 60%),
     var(--bg);
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 /* ── top bar ── */
 .topbar {
-  position: sticky; top: 0; z-index: 10;
+  position: static; z-index: 10; flex-shrink: 0;
   display: flex; align-items: center; justify-content: space-between; gap: 16px;
   padding: 14px 26px;
   background: rgba(10, 14, 25, 0.82);
@@ -109,9 +112,23 @@ body {
 /* ── layout ── */
 .layout {
   display: grid; grid-template-columns: minmax(0, 1fr) 372px;
-  gap: 22px; padding: 22px 26px 60px; max-width: 1460px; margin: 0 auto;
+  gap: 22px; padding: 22px 26px 26px; max-width: 1460px; margin: 0 auto;
+  flex: 1;
+  min-height: 0;              /* let children own the height */
+  overflow: hidden;           /* no page scroll — columns scroll instead */
 }
-@media (max-width: 1020px) { .layout { grid-template-columns: 1fr; } }
+.timeline-col { overflow-y: auto; min-height: 0; padding-right: 6px; }
+.sidebar {
+  overflow-y: auto; min-height: 0; padding-right: 6px;
+  position: static;           /* sticky+viewport overflow made the bottom
+                                 panels unreachable; independent scrolling
+                                 replaces it */
+}
+@media (max-width: 1020px) {
+  body { overflow: auto; height: auto; }
+  .layout { grid-template-columns: 1fr; overflow: visible; }
+  .timeline-col, .sidebar { overflow: visible; }
+}
 
 .col-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 14px; }
 .col-head h2, .panel-title {
@@ -219,7 +236,7 @@ body {
 
 /* state cards & sidebar */
 .muted { color: var(--ink-faint); font-size: 12px; }
-.sidebar { display: flex; flex-direction: column; gap: 16px; position: sticky; top: 86px; align-self: start; }
+.sidebar { display: flex; flex-direction: column; gap: 16px; }
 .panel {
   background: var(--panel); border: 1px solid var(--panel-border);
   border-radius: 12px; padding: 15px 17px;

@@ -190,7 +190,8 @@ def evaluate(snapshot: dict, prev_snapshot: dict | None) -> dict:
                 "domination": ("Domination victory: capture every capital; "
                                "needs a strong modern army and production"),
                 "religion": ("Religious victory: Holy Sites, faith income, "
-                             "apostles; strong Georgia (Tamar) synergy"),
+                             "apostles; best when faith is already flowing "
+                             "or the civ has faith synergy"),
                 "diplomatic": ("Diplomatic victory: World Congress favors "
                                "and alliances; slow and situational"),
             },
