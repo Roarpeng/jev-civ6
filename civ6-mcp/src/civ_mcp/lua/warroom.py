@@ -156,6 +156,7 @@ _WR_CURATED_EVENTS = [
     "UnitOperationCompleted", "UnitOperationStarted",
     "UnitGreatPersonActivated", "UnitPromoted",
     "UnitUpgraded",
+    "DiplomacySessionClosed", "DiplomacyMakePeace",
     "GoodyHutReceived",
     # cities & builds
     "CityAddedToMap", "CityRemovedFromMap", "CityInitialized",
@@ -220,6 +221,25 @@ else
     end
     wrHook(Events, "")
     wrHook(GameEvents, "G:")
+
+    -- Dedicated DiplomacyStatement hook: the generic hook receives an
+    -- opaque kVariants table as its only arg — pull-mode readers need the
+    -- PARSED statement (type key, session, from/to) to answer AI proposals
+    -- that arrive between turns, when no UI text controls are populated.
+    pcall(function()
+        Events.DiplomacyStatement.Add(function(kv)
+            local tname = "UNKNOWN"
+            pcall(function()
+                tname = DiplomacyManager.GetKeyName(kv.StatementType) or "UNKNOWN"
+            end)
+            wrPush("DiploStatement",
+                   "type=" .. tostring(tname) ..
+                   "|sid=" .. tostring(kv.SessionID) ..
+                   "|from=" .. tostring(kv.FromPlayer) ..
+                   "|to=" .. tostring(kv.ToPlayer))
+        end)
+        __wr.hooked = __wr.hooked + 1
+    end)
 
     -- one-time discovery of every event name this build actually exposes
     pcall(function()

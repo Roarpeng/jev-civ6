@@ -47,6 +47,26 @@ DEFAULT_FAIL_LIMIT = 3
 BLOCKER_PER_KIND_CAP = 2               # same blocker handled N times → pause
 BLOCKER_TOTAL_CAP = 6                  # total blocker handling per advance
 
+# AI diplomacy statement types (engine key names) -> plain description for
+# the judgment layer; unknown types pass through with their raw key.
+_DIPLO_STMT_DESC = {
+    "MAKE_DEAL": "proposes a trade deal",
+    "MAKE_DEMAND": "demands tribute from us",
+    "DECLARE_FRIEND": "offers a declaration of friendship",
+    "AI_OFFER_FRIENDSHIP": "offers friendship",
+    "DIPLOMATIC_DELEGATION": "sends a diplomatic delegation",
+    "RESIDENT_EMBASSY": "proposes resident embassies",
+    "OPEN_BORDERS": "proposes open borders",
+    "MAKE_PEACE": "proposes peace",
+    "AI_WARNING_STOP_SPYING_ON_ME": "warns us to stop spying",
+    "WARNING_DONT_SETTLE_NEAR_ME": "warns us to stop settling near them",
+    "WARNING_STOP_CONVERTING_MY_CITIES": "warns us to stop converting cities",
+    "WARNING_STOP_DIGGING_UP_ARTIFACTS": "warns us to stop digging artifacts",
+    "AI_COMPLIMENT": "pays us a compliment",
+    "AI_GREETING": "greets us",
+    "DENOUNCE": "denounces us publicly",
+}
+
 HANDLABLE_BLOCKERS = ("world_congress", "trade_deal", "diplomacy", "dedication",
                       "great_person", "policy_fill", "governor",
                       "blockers", "hang")
@@ -463,6 +483,7 @@ class AutoPilot:
         self._t_exec: float = 0.0
         self._legs_str: str = ""
         self._trade_step_turn: int | None = None
+        self._diplo_stmt: dict[int, dict] = {}
         self._strategy: dict | None = None   # {"path": "science", "since_turn": N}
         self._religion_founding_started = False
         self._last_policy_review: int | None = None
@@ -777,6 +798,18 @@ class AutoPilot:
                 "footer": wr.get("footer", ""),
             }, turn=None)
         if game_events:
+            for e in game_events:
+                if str(e.get("name")) == "DiploStatement":
+                    d = str(e.get("detail") or "")
+                    fields = dict(
+                        kv.split("=", 1) for kv in d.split("|") if "=" in kv)
+                    frm, to = fields.get("from"), fields.get("to")
+                    if frm is not None and to is not None:
+                        other = int(to) if str(frm) == "0" else int(frm)
+                        self._diplo_stmt[other] = {
+                            "type": fields.get("type", "UNKNOWN"),
+                            "turn": str(e.get("turn")),
+                        }
             self.journal.add("game_event", {
                 "events": game_events[:120],
                 "count": len(game_events),
@@ -1994,6 +2027,46 @@ class AutoPilot:
                         r = await self._act(bridge, "diplomacy_respond", {
                             "other_player_id": int(pid),
                             "response": str(choice)}, turn)
+                    elif self._diplo_stmt.get(int(pid)):
+                        # Empty-dialogue session: the AI's statement arrived
+                        # while no leader screen was rendered (UI controls
+                        # empty) — decide from the EVENT-captured statement.
+                        stmt = self._diplo_stmt.pop(int(pid))
+                        stype = str(stmt.get("type"))
+                        desc = _DIPLO_STMT_DESC.get(
+                            stype, f"statement of type {stype}")
+                        ans = await self._ask_judge_inline(
+                            {"diplomacy_response": {
+                                "type": "choice",
+                                "instructions": (
+                                    f"{s.get('other_civ_name')} "
+                                    f"({s.get('other_leader_name')}) "
+                                    f'says: "{desc}" - respond.'),
+                                "criteria": {
+                                    "POSITIVE": "friendly / accept the offer",
+                                    "NEGATIVE": "refuse / reject the demand",
+                                    "RESPONSE_IGNORE": "acknowledge but "
+                                                       "decline to commit",
+                                },
+                            }}, turn,
+                            situation=f"Diplomacy with "
+                                      f"{s.get('other_civ_name')}")
+                        choice = ((ans or {}).get("diplomacy_response", {})
+                                  .get("choice"))
+                        if choice not in ("POSITIVE", "NEGATIVE",
+                                          "RESPONSE_IGNORE"):
+                            # heuristic: warm words POSITIVE, warnings
+                            # ignored, demands refused
+                            choice = ("NEGATIVE" if any(
+                                k in stype for k in
+                                ("DEMAND", "THREAT", "WARNING_STOP"))
+                                else "POSITIVE" if any(
+                                k in stype for k in
+                                ("COMPLIMENT", "OFFER", "FRIEND", "WELCOME"))
+                                else "RESPONSE_IGNORE")
+                        r = await self._act(bridge, "diplomacy_respond", {
+                            "other_player_id": int(pid),
+                            "response": choice}, turn)
                     elif dialogue:
                         # QUESTION session (no enumerated choices, e.g. an
                         # embassy request) — EXIT won't close it; answer it.
