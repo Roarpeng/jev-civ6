@@ -1527,6 +1527,16 @@ class GameState:
         lines = await self.conn.execute_write(lua)
         return _action_result(lines)
 
+    async def exit_to_menu(self) -> str:
+        """Leave the current game back to the main menu (InGame context)."""
+        ingame = next((i for i, n in self.conn.lua_states.items()
+                       if n == "InGame"), None)
+        if ingame is None:
+            return "ERR:NO_INGAME|not in a game"
+        await self.conn.execute_in_state(
+            ingame, "Events.ExitToMainMenu() print('EXITING')", timeout=6.0)
+        return "OK:EXIT_TO_MENU_SENT"
+
     async def load_save_menu(self, save_name: str) -> str:
         """Load a save from the MAIN MENU (frontend context).
 
@@ -1541,16 +1551,20 @@ class GameState:
             (idx for idx, name in self.conn.lua_states.items()
              if name == "MainMenu"), None)
         if menu_idx is None:
-            # The menu registers its Lua context late — the bridge may have
-            # connected while only Main State existed. One reconnect re-runs
-            # the handshake and re-parses the (now complete) state list.
-            try:
-                await self.conn.reconnect()
-            except Exception:  # noqa: BLE001
-                pass
-            menu_idx = next(
-                (idx for idx, name in self.conn.lua_states.items()
-                 if name == "MainMenu"), None)
+            # The menu context registers asynchronously — right after
+            # ExitToMainMenu (or while the boot resumes a session) the LSQ
+            # may only list Main State. Poll reconnects for up to ~15s.
+            for _ in range(6):
+                await _aio.sleep(2.5)
+                try:
+                    await self.conn.reconnect()
+                except Exception:  # noqa: BLE001
+                    continue
+                menu_idx = next(
+                    (idx for idx, name in self.conn.lua_states.items()
+                     if name == "MainMenu"), None)
+                if menu_idx is not None:
+                    break
         if menu_idx is None:
             seen = ",".join(f"{i}:{n}" for i, n in
                             sorted(self.conn.lua_states.items()))
@@ -1562,14 +1576,20 @@ class GameState:
             "local function OnLoad(fileList, qid) "
             "  UI.CloseFileListQuery(qid) "
             "  LuaEvents.FileListQueryResults.Remove(OnLoad) "
+            "  local best, bestT = nil, -1 "
             "  for i, s in ipairs(fileList) do "
             "    if string.find(s.Name, target, 1, true) then "
-            '      ExposedMembers.MCPHit = s.Name '
-            "      print('LOADING|' .. s.Name) "
-            "      Network.LeaveGame() "
-            "      Network.LoadGame(s, ServerType.SERVER_TYPE_NONE) "
-            "      return "
+            "      local okT, t = pcall(function() "
+            "        return UI.GetSaveGameModificationTimeRaw(s) end) "
+            "      if okT and t and t > bestT then best, bestT = s, t end "
             "    end "
+            "  end "
+            "  if best ~= nil then "
+            "    ExposedMembers.MCPHit = best.Name "
+            "    print('LOADING|' .. best.Name) "
+            "    Network.LeaveGame() "
+            "    Network.LoadGame(best, ServerType.SERVER_TYPE_NONE) "
+            "    return "
             "  end "
             "  ExposedMembers.MCPHit = 'NOT_FOUND' "
             "end "

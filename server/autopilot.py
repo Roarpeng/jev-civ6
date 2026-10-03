@@ -486,6 +486,7 @@ class AutoPilot:
         self._boot_enter_sent = False
         self._menu_wait_start = time.monotonic()
         self._autoload_issued: float = 0.0
+        self._campaign_switch_last: float = 0.0
         self._autoload_entered = False
         self._boot_enter_sent = False
         self._menu_wait_start = time.monotonic()
@@ -1016,6 +1017,36 @@ class AutoPilot:
                    for e in game_events[:12]]
             snapshot["notes"] = list(snapshot.get("notes") or []) + key
         self.status["last_snapshot"] = snapshot
+        # Campaign continuity guard: the boot resume card restores the LAST
+        # session, which may be the WRONG campaign. When a save is configured
+        # and the freshly-loaded game is young (early turns) while the
+        # configured save implies an established one, leave to the menu and
+        # load the configured save once.
+        autosave = (self.cfg.autopilot.autosave_load or "").strip()
+        digits = re.findall(r"(\d{3,})", autosave)
+        turn_now = snapshot.get("turn") or 0
+        if (autosave and digits and turn_now < int(digits[-1]) - 10
+                and time.monotonic() - self._campaign_switch_last > 60):
+            self._campaign_switch_last = time.monotonic()
+            self.journal.add("action", {
+                "tool": "campaign_switch", "args": {
+                    "loaded_civ": snapshot.get("civ"), "turn": turn_now,
+                    "target_save": autosave},
+                "result": "young game is not the configured campaign — "
+                          "leaving to menu and loading the target save"},
+                turn=snapshot["turn"])
+            r1 = await self._act(bridge, "exit_to_menu", {},
+                                 snapshot["turn"], timeout=90.0)
+            await asyncio.sleep(12.0)
+            r2 = await self._act(bridge, "load_save_menu",
+                                 {"save_name": autosave}, snapshot["turn"],
+                                 timeout=90.0)
+            self.journal.add("action", {
+                "tool": "campaign_switch_result", "args": {},
+                "result": f"{r1} / {r2}"[:150]}, turn=snapshot["turn"])
+            # loading drops the link; let the loop rebuild + rediscover
+            raise ConnectionError("campaign switch — reconnecting after load")
+
         self._set(turn=snapshot["turn"])
         self.journal.add("state", {"snapshot": snapshot}, turn=snapshot["turn"])
 
@@ -1746,6 +1777,43 @@ class AutoPilot:
             await self._act(bridge, "promote_unit", {
                 "unit_id": int(cand["unit_id"]),
                 "promotion_type": str(cand["promotion_type"])}, turn)
+
+    async def _capture_stall_dossier(self, bridge: Bridge, turn) -> dict:
+        """Structured evidence for an unexplained stall — every surface the
+        game can block on, one journal event. A dossier IS the spec for the
+        next blocker handler: implement what it shows, restart, repeat."""
+        dossier: dict = {"turn": turn}
+        probes = (
+            ("popups", "dismiss_popup", {}),
+            ("sessions", "get_diplomacy_sessions", {}),
+            ("deals", "get_pending_deals", {}),
+            ("congress", "get_world_congress", {}),
+            ("policies", "get_policies", {}),
+            ("governors", "get_governors", {}),
+            ("trade", "get_trade_routes", {}),
+            ("religion", "get_religion_founding_status", {}),
+        )
+        for name, tool, args in probes:
+            try:
+                dossier[name] = await asyncio.to_thread(
+                    bridge.act_data, tool, args)
+            except Exception as e:  # noqa: BLE001
+                dossier[name] = f"probe error: {e}"
+        self.journal.add("stall_dossier", dossier, turn=turn)
+        summary = []
+        for k in ("popups", "sessions", "deals", "congress"):
+            v = dossier.get(k)
+            if isinstance(v, list) and v:
+                summary.append(f"{k}x{len(v)}")
+            elif isinstance(v, dict) and (v.get("is_in_session")
+                                          or v.get("resolutions")):
+                summary.append(f"{k}!")
+        self.journal.add("action", {
+            "tool": "stall_dossier", "args": {},
+            "result": ("stall evidence: " + (", ".join(summary) or
+                       "no obvious blocker — see stall_dossier event"))},
+            turn=turn)
+        return dossier
 
     async def _ensure_pantheon(self, bridge: Bridge, turn: int) -> None:
         """Choose a pantheon the moment faith allows it.

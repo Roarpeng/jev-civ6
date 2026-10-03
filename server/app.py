@@ -258,9 +258,13 @@ def config_info():
                 "model": cfg.llm.model,
                 "base_url": cfg.llm.base_url,
                 "api_key_env": cfg.llm.api_key_env,
-                "api_key_set": bool(cfg.llm.api_key or
-                                    (cfg.llm.api_key_env and
-                                     os.environ.get(cfg.llm.api_key_env))),
+                "api_key_set": bool(
+                    cfg.llm.api_key
+                    or (cfg.llm.api_key_env
+                        and os.environ.get(cfg.llm.api_key_env))
+                    # the typesafe judge reads this env var by default
+                    or (cfg.llm.provider == "typesafe"
+                        and bool(os.environ.get("TYPESAFE_API_KEY")))),
                 "timeout_s": cfg.llm.timeout_s,
             },
             "bridge": {"game_host": cfg.bridge.game_host,
@@ -339,9 +343,12 @@ def config_update(upd: ConfigUpdate):
             "llm": {"provider": new.llm.provider, "model": new.llm.model,
                     "base_url": new.llm.base_url,
                     "api_key_env": new.llm.api_key_env,
-                    "api_key_set": bool(new.llm.api_key or
-                                        (new.llm.api_key_env and
-                                         os.environ.get(new.llm.api_key_env)))}}
+                    "api_key_set": bool(
+                        new.llm.api_key
+                        or (new.llm.api_key_env
+                            and os.environ.get(new.llm.api_key_env))
+                        or (new.llm.provider == "typesafe"
+                            and bool(os.environ.get("TYPESAFE_API_KEY"))))}}
 
 
 @app.post("/api/config/test")

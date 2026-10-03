@@ -6,4 +6,4 @@ provider = "typesafe"
 timeout_s = 60.0
 
 [autopilot]
-autosave_load = "AutoSave_0232"
+autosave_load = ""
