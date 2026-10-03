@@ -81,6 +81,7 @@ ACTION_TOOLS = {
     "load_game_save": ("save_name",),
     "load_save_menu": ("save_name",),
     "exit_to_menu": (),
+    "close_disaster_popup": (),
     "get_religion_founding_status": (),
     "found_religion": ("religion_type", "follower_belief", "founder_belief"),
     "choose_pantheon": ("belief_type",),

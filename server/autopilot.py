@@ -1102,6 +1102,11 @@ class AutoPilot:
         await self._advance_prophet(bridge, snapshot, snapshot["turn"])
 
         t_reflex0 = time.monotonic()
+        # Gathering Storm turn-start disaster report blocks the turn in its
+        # own Lua state (invisible to the generic popup sweep)
+        await self._act(bridge, "close_disaster_popup", {},
+                        snapshot["turn"], timeout=10.0)
+
         # pantheon the moment faith allows (forced modal unblock)
         await self._ensure_pantheon(bridge, snapshot["turn"])
 

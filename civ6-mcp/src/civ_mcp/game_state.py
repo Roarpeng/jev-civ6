@@ -1527,6 +1527,28 @@ class GameState:
         lines = await self.conn.execute_write(lua)
         return _action_result(lines)
 
+    async def close_disaster_popup(self) -> str:
+        """Close the Gathering Storm turn-start disaster report if visible.
+
+        The popup lives in its OWN Lua state (NaturalDisasterPopup); the
+        generic InGame popup sweep never sees it. Close() is that state's
+        own global — call it only when the context is actually shown.
+        """
+        idx = next((i for i, n in self.conn.lua_states.items()
+                    if n == "NaturalDisasterPopup"), None)
+        if idx is None:
+            return "ERR:NO_DISASTER_STATE"
+        lines = await self.conn.execute_in_state(
+            idx,
+            "if not ContextPtr:IsHidden() then Close() "
+            "print('OK:DISASTER_CLOSED') "
+            "else print('OK:NOT_SHOWING') end",
+            timeout=5.0)
+        for ln in lines:
+            if ln.startswith(("OK:DISASTER_CLOSED", "OK:NOT_SHOWING")):
+                return ln
+        return "OK:DISASTER_SWEEP_SENT"
+
     async def exit_to_menu(self) -> str:
         """Leave the current game back to the main menu (InGame context)."""
         ingame = next((i for i, n in self.conn.lua_states.items()
